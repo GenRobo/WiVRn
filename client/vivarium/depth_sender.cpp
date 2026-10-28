@@ -266,6 +266,9 @@ void vivarium::depth_sender::frame(XrTime display_time)
 			failed = true;
 			return;
 		}
+		// A provider created after xrBeginFrame has not observed that frame boundary.
+		// Acquire on the next frame, after the provider has seen xrBeginFrame.
+		return;
 	}
 
 	if (active.rate_hz > 0 and last_sent and display_time - last_sent < 1'000'000'000 / active.rate_hz)
