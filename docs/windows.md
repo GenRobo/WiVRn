@@ -83,6 +83,8 @@ The headset finds the server with mDNS, like on a local network:
   New-NetFirewallRule -DisplayName "WiVRn server" -Direction Inbound -Action Allow -Profile Any -Program "C:\path\to\WiVRn\build-win\server\wivrn-server.exe"
   ```
 
+Direct IPv6 URLs use the **headset's** interface name, not the Windows interface index: `%25usb0` in the URI must become `%usb0` in the unbracketed resolver hostname. The client decodes the host before removing literal brackets because the pinned Boost.URL 1.89 `host_address()` asserts on encoded zone IDs. `client/test/server_uri_test.cpp` covers named/numeric scopes, unscoped literals, IPv4 and DNS names; build the `wivrn-server-uri-test` target in a native Debug client build to retain the library assertions.
+
 ### Connecting over the network
 
 Allow inbound TCP and UDP port 9757 for `wivrn-server.exe` in the Windows firewall (see the rule above). The server appears in the headset's server list, or connect with the PC's address in a `wivrn://` URL.

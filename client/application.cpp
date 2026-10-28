@@ -21,6 +21,7 @@
 
 #include "openxr/openxr.h"
 #include "scene.h"
+#include "server_uri.h"
 #include "spdlog/common.h"
 #include "spdlog/spdlog.h"
 #include "utils/class_from_member.h"
@@ -1527,8 +1528,7 @@ void application::set_server_uri(std::string uri)
 		server_intent =
 		        wivrn_discover::service{
 		                .name = "",
-		                // Without the brackets of IPv6 literals, and with the zone id ("%25usb0" decoded to "%usb0"), for getaddrinfo
-		                .hostname = parse_result->host_address(),
+		                .hostname = wivrn::uri_hostname(*parse_result),
 		                .port = parse_result->has_port() ? parse_result->port_number() : wivrn::default_port,
 		                .tcp_only = is_tcp_scheme(parse_result->scheme()),
 		                .pin = parse_result->password(),
