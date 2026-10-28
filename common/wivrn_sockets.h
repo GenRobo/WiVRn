@@ -19,22 +19,81 @@
 
 #pragma once
 
+#ifdef _WIN32
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <winsock2.h>
+#include <ws2tcpip.h>
+#endif
+
 #include "crypto.h"
 #include "wivrn_serialization.h"
 
 #include <atomic>
 #include <cassert>
+#include <cerrno>
+#include <cstddef>
 #include <exception>
-#include <fcntl.h>
 #include <memory>
 #include <mutex>
-#include <netinet/ip.h>
 #include <span>
+#include <system_error>
 #include <utility>
 #include <vector>
 
+#ifndef _WIN32
+#include <fcntl.h>
+#include <netinet/ip.h>
+#include <poll.h>
+#endif
+
 namespace wivrn
 {
+#ifdef _WIN32
+using socket_t = SOCKET;
+using pollfd_t = WSAPOLLFD;
+inline constexpr socket_t invalid_socket = INVALID_SOCKET;
+
+inline int last_socket_error()
+{
+	return WSAGetLastError();
+}
+
+// Winsock error codes are Win32 error codes
+inline const std::error_category & socket_error_category()
+{
+	return std::system_category();
+}
+#else
+using socket_t = int;
+using pollfd_t = ::pollfd;
+inline constexpr socket_t invalid_socket = -1;
+
+inline int last_socket_error()
+{
+	return errno;
+}
+
+inline const std::error_category & socket_error_category()
+{
+	return std::generic_category();
+}
+#endif
+
+// WSAStartup on Windows, no-op elsewhere. Call once before creating any socket.
+void init_sockets();
+
+// ::poll / WSAPoll. Entries whose fd is invalid_socket are ignored (revents = 0) on all platforms.
+int poll_sockets(pollfd_t * fds, size_t n, int timeout_ms);
+
+// Connected, unencrypted datagram socket pair for in-process/inter-process control messages.
+// Linux: socketpair(AF_UNIX, SOCK_DGRAM); Windows: two UDP sockets on 127.0.0.1 connected to each other.
+std::pair<socket_t, socket_t> make_datagram_pair();
+
 class socket_shutdown : public std::exception
 {
 public:
@@ -65,29 +124,29 @@ static_assert(index_of_type<float, int, float>::value == 1);
 class fd_base
 {
 protected:
-	int fd = -1;
+	socket_t fd = invalid_socket;
 
 	fd_base(const fd_base &) = delete;
 
 public:
 	fd_base() = default;
-	fd_base(int fd) :
+	fd_base(socket_t fd) :
 	        fd{fd} {}
 	fd_base(fd_base &&);
 	fd_base & operator=(fd_base &&);
 	~fd_base();
 
-	int get_fd() const
+	socket_t get_fd() const
 	{
 		return fd;
 	}
 
 	operator bool() const
 	{
-		return fd != -1;
+		return fd != invalid_socket;
 	}
 
-	operator int() const
+	operator socket_t() const
 	{
 		return fd;
 	}
@@ -110,7 +169,7 @@ class UDP : public fd_base
 
 public:
 	UDP();
-	explicit UDP(int fd);
+	explicit UDP(socket_t fd);
 
 	deserialization_packet receive_raw();
 	deserialization_packet receive_pending();
@@ -146,7 +205,7 @@ public:
 	TCP() = default;
 	TCP(sockaddr_in6 address);
 	TCP(sockaddr_in address);
-	explicit TCP(int fd);
+	explicit TCP(socket_t fd);
 
 	deserialization_packet receive_raw();
 	deserialization_packet receive_pending();
@@ -167,14 +226,16 @@ public:
 	template <typename T = TCP>
 	std::pair<T, sockaddr_in6> accept()
 	{
-		assert(fd != -1);
+		assert(fd != invalid_socket);
 		sockaddr_in6 addr{};
 		socklen_t addrlen = sizeof(addr);
 
-		int fd2 = ::accept(fd, (sockaddr *)&addr, &addrlen);
+		socket_t fd2 = ::accept(fd, (sockaddr *)&addr, &addrlen);
+#ifndef _WIN32
 		fcntl(fd, F_SETFD, FD_CLOEXEC);
-		if (fd2 < 0)
-			throw std::system_error{errno, std::generic_category()};
+#endif
+		if (fd2 == invalid_socket)
+			throw std::system_error{last_socket_error(), socket_error_category()};
 
 		return {T{fd2}, addr};
 	}

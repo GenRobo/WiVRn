@@ -23,7 +23,9 @@
 #include <chrono>
 #include <cstdint>
 #include <magic_enum.hpp>
+#ifndef _WIN32
 #include <netinet/in.h>
+#endif
 #include <openssl/aes.h>
 #include <optional>
 #include <span>

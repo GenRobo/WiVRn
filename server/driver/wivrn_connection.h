@@ -25,7 +25,6 @@
 
 #include <atomic>
 #include <optional>
-#include <poll.h>
 #include <stdexcept>
 #include <stop_token>
 #include <system_error>
@@ -121,7 +120,7 @@ public:
 	template <typename T>
 	int poll(T && visitor, int timeout)
 	{
-		pollfd fds[3] = {};
+		pollfd_t fds[3] = {};
 		fds[0].events = POLLIN;
 		fds[0].fd = stream.get_fd();
 		fds[1].events = POLLIN;
@@ -134,9 +133,9 @@ public:
 		while (auto packet = control.receive_pending())
 			std::visit(std::forward<T>(visitor), std::move(*packet));
 
-		int r = ::poll(fds, std::size(fds), timeout);
+		int r = poll_sockets(fds, std::size(fds), timeout);
 		if (r < 0)
-			throw std::system_error(errno, std::system_category());
+			throw std::system_error(last_socket_error(), std::system_category());
 
 		if (fds[0].revents & (POLLHUP | POLLERR))
 			throw std::runtime_error("Error on stream socket");

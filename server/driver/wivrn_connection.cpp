@@ -25,12 +25,18 @@
 #include "wivrn_ipc.h"
 #include "wivrn_packets.h"
 #include <algorithm>
-#include <arpa/inet.h>
 #include <chrono>
-#include <poll.h>
+#include <cstring>
 #include <regex>
-#include <sys/socket.h>
 #include <variant>
+
+#ifdef _WIN32
+static constexpr int shut_rdwr = SD_BOTH;
+#else
+#include <arpa/inet.h>
+#include <sys/socket.h>
+static constexpr int shut_rdwr = SHUT_RDWR;
+#endif
 
 using namespace std::chrono_literals;
 
@@ -42,8 +48,14 @@ static void handle_event_from_main_loop(wivrn::to_headset::stream_tab_change) {}
 
 static std::string clean_key(std::string key)
 {
+#ifdef _WIN32
+	// MSVC's <regex> has no regex_constants::multiline: match the PEM armor lines without anchors
+	static const std::regex header{"-+BEGIN [^\\n]*-+"};
+	static const std::regex footer{"-+END [^\\n]*-+"};
+#else
 	static const std::regex header{"^-+BEGIN .*-+$", std::regex_constants::multiline};
 	static const std::regex footer{"^-+END .*-+$", std::regex_constants::multiline};
+#endif
 	static const std::regex whitespace{"[[:space:]]"};
 
 	key = std::regex_replace(key, header, "");
@@ -73,7 +85,7 @@ void wivrn::wivrn_connection::init(std::stop_token stop_token, std::function<voi
 	socklen_t len = sizeof(server_address);
 	if (getsockname(control.get_fd(), (sockaddr *)&server_address, &len) < 0)
 	{
-		throw std::system_error(errno, std::system_category(), "Cannot get socket port");
+		throw std::system_error(last_socket_error(), std::system_category(), "Cannot get socket port");
 	}
 	int port = ntohs(((struct sockaddr_in6 *)&server_address)->sin6_port);
 
@@ -81,7 +93,7 @@ void wivrn::wivrn_connection::init(std::stop_token stop_token, std::function<voi
 	len = sizeof(client_address);
 	if (getpeername(control.get_fd(), (sockaddr *)&client_address, &len) < 0)
 	{
-		throw std::system_error(errno, std::system_category(), "Cannot get client address");
+		throw std::system_error(last_socket_error(), std::system_category(), "Cannot get client address");
 	}
 
 	if (configuration().tcp_only)
@@ -108,7 +120,7 @@ void wivrn::wivrn_connection::init(std::stop_token stop_token, std::function<voi
 
 			tick();
 
-			pollfd fds[3] = {};
+			pollfd_t fds[3] = {};
 			if (allow_stream_socket)
 			{
 				fds[0].events = POLLIN;
@@ -120,9 +132,9 @@ void wivrn::wivrn_connection::init(std::stop_token stop_token, std::function<voi
 			fds[2].fd = wivrn_ipc_socket_monado->get_fd();
 
 			// Make sure tick() is called at least every 100ms
-			int r = ::poll(fds, std::size(fds), 100);
+			int r = poll_sockets(fds, std::size(fds), 100);
 			if (r < 0)
-				throw std::system_error(errno, std::system_category());
+				throw std::system_error(last_socket_error(), std::system_category());
 
 			if (allow_stream_socket and (fds[0].revents & (POLLHUP | POLLERR)))
 				throw std::runtime_error("Error on stream socket");
@@ -297,20 +309,20 @@ void wivrn::wivrn_connection::reset(std::stop_token stop, TCP && tcp, std::funct
 void wivrn::wivrn_connection::shutdown()
 {
 	if (stream)
-		::shutdown(stream.get_fd(), SHUT_RDWR);
+		::shutdown(stream.get_fd(), shut_rdwr);
 	if (control)
-		::shutdown(control.get_fd(), SHUT_RDWR);
+		::shutdown(control.get_fd(), shut_rdwr);
 }
 
 std::optional<wivrn::from_headset::packets> wivrn::wivrn_connection::poll_control(int timeout)
 {
-	pollfd fds{};
+	pollfd_t fds{};
 	fds.events = POLLIN;
 	fds.fd = control.get_fd();
 
-	int r = ::poll(&fds, 1, timeout);
+	int r = poll_sockets(&fds, 1, timeout);
 	if (r < 0)
-		throw std::system_error(errno, std::system_category());
+		throw std::system_error(last_socket_error(), std::system_category());
 
 	if (r > 0 && (fds.revents & POLLIN))
 	{

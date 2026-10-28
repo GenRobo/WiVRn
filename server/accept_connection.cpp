@@ -27,24 +27,26 @@
 #include "wivrn_ipc.h"
 #include "wivrn_sockets.h"
 
-#include <sys/poll.h>
-
 std::unique_ptr<wivrn::TCP> wivrn::accept_connection(wivrn_session & cnx, std::stop_token stop, std::function<void(wivrn_session &)> tick)
 {
 	wivrn_ipc_socket_monado->send(from_monado::headset_disconnected{});
 
 	wivrn::TCPListener listener(configuration().port);
 
-	pollfd fds[2]{
+	pollfd_t fds[2]{
 	        {.fd = listener.get_fd(), .events = POLLIN},
 	        {.fd = wivrn_ipc_socket_monado->get_fd(), .events = POLLIN},
 	};
 
 	while (not stop.stop_requested())
 	{
-		if (poll(fds, std::size(fds), 100) < 0)
+		if (poll_sockets(fds, std::size(fds), 100) < 0)
 		{
+#ifdef _WIN32
+			U_LOG_E("poll: socket error %d", last_socket_error());
+#else
 			perror("poll");
+#endif
 			return {};
 		}
 
