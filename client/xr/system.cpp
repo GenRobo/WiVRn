@@ -242,6 +242,24 @@ XrSystemBodyTrackingPropertiesBD xr::system::bd_body_tracking_properties() const
 	return body_tracking_prop;
 }
 
+XrSystemEnvironmentDepthPropertiesMETA xr::system::meta_environment_depth_properties() const
+{
+	if (!id)
+		throw std::invalid_argument("this");
+
+	XrSystemEnvironmentDepthPropertiesMETA depth_prop{
+	        .type = XR_TYPE_SYSTEM_ENVIRONMENT_DEPTH_PROPERTIES_META,
+	};
+
+	XrSystemProperties prop{
+	        .type = XR_TYPE_SYSTEM_PROPERTIES,
+	        .next = &depth_prop,
+	};
+	CHECK_XR(xrGetSystemProperties(*inst, id, &prop));
+
+	return depth_prop;
+}
+
 xr::passthrough_type xr::system::passthrough_supported() const
 {
 	if (utils::contains(environment_blend_modes(XR_VIEW_CONFIGURATION_TYPE_PRIMARY_STEREO), XR_ENVIRONMENT_BLEND_MODE_ALPHA_BLEND))

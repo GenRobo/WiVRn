@@ -32,16 +32,24 @@ class LumaFrame(val index: Int, val width: Int, val height: Int) {
     var rollingShutterSkewNs = -1L
     var dictionary = 0
 
-    /** Copies the image rows of [plane], whose rows start every [rowStride] bytes. */
+    /** Copies YUV_420_888 luma (pixel stride 1), preserving the plane's position and limit. */
     fun copyLuma(plane: ByteBuffer, rowStride: Int) {
+        val position = plane.position()
+        val limit = plane.limit()
+        require(plane.remaining() >= (height - 1) * rowStride + width)
         pixels.clear()
-        for (row in 0 until height) {
-            val start = row * rowStride
-            plane.limit(start + width)
-            plane.position(start)
-            pixels.put(plane)
+        try {
+            for (row in 0 until height) {
+                val start = position + row * rowStride
+                plane.position(start)
+                plane.limit(start + width)
+                pixels.put(plane)
+                plane.limit(limit)
+            }
+        } finally {
+            plane.limit(limit)
+            plane.position(position)
         }
-        plane.clear()
     }
 
     fun setCapture(frameNumber: Long, exposureTimeNs: Long, rollingShutterSkewNs: Long) {

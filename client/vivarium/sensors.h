@@ -19,6 +19,7 @@
 #pragma once
 
 #include "android/jnipp.h"
+#include "depth_sender.h"
 
 #include <optional>
 #include <vulkan/vulkan_raii.hpp>
@@ -35,7 +36,7 @@ namespace vivarium
 {
 
 // Asks for camera permissions, one dialog after the other; called when the
-// "Vivarium camera" setting is turned on so the prompts show in the lobby.
+// marker tracking or RGB streaming is turned on so the prompts show in the lobby.
 void request_permissions();
 
 // The headset sensors streamed to the PC on the "vivarium-camera" channel while a
@@ -45,12 +46,17 @@ void request_permissions();
 class sensors
 {
 	jni::object<"org/meumeu/wivrn/vivarium/VivariumCamera"> camera;
+	const bool marker_tracking;
+	const bool rgb_camera_streaming;
+	const bool depth_camera_streaming;
 	bool camera_started = false;
 	bool camera_failed = false;
 	bool permission_requested = false;
+	std::optional<depth_sender> depth;
 
 public:
-	sensors(xr::instance &, xr::system &, xr::session &, vk::raii::Device &, uint32_t queue_family_index);
+	sensors(xr::instance &, xr::system &, xr::session &, vk::raii::Device &, uint32_t queue_family_index,
+	        bool marker_tracking, bool rgb_camera_streaming, bool depth_camera_streaming);
 	~sensors();
 
 	sensors(const sensors &) = delete;

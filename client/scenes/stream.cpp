@@ -830,10 +830,12 @@ bool scenes::stream::is_gui_interactable() const
 void scenes::stream::render(const XrFrameState & frame_state)
 {
 #ifdef __ANDROID__
-	if (not application::get_config().vivarium_camera or state_ == state::shutdown or not frame_state.shouldRender)
+	const auto & config = application::get_config();
+	if (not (config.marker_tracking or config.rgb_camera_streaming or config.depth_camera_streaming) or state_ == state::shutdown or not frame_state.shouldRender)
 		vivarium_sensors.reset();
 	else if (not vivarium_sensors)
-		vivarium_sensors = std::make_unique<vivarium::sensors>(instance, system, session, device, queue_family_index);
+		vivarium_sensors = std::make_unique<vivarium::sensors>(instance, system, session, device, queue_family_index,
+		                                                    config.marker_tracking, config.rgb_camera_streaming, config.depth_camera_streaming);
 #endif
 	if (state_ == state::shutdown)
 		application::pop_scene();

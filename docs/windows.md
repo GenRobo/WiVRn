@@ -38,6 +38,8 @@ cmake --build build-win --target wivrn-server openxr_wivrn
 
 The first configuration installs the dependencies listed in `tools/windows/vcpkg.json` into `build-win\vcpkg_installed` (x264 is built from source, this takes a while).
 
+Rebuild **both** `wivrn-server` and `openxr_wivrn` after updating the checkout, then restart the server and VR application. Monado checks their embedded revision strings; a stale runtime DLL can make Chrome report “VR NOT FOUND” even though the headset is connected. Building only the server or handshake probe does not refresh that DLL.
+
 Outputs:
 - `build-win\server\wivrn-server.exe`
 - `build-win\openxr_wivrn-dev.json`, the OpenXR runtime manifest pointing at the runtime DLL in the build tree.
@@ -82,6 +84,8 @@ The headset finds the server with mDNS, like on a local network:
   ```powershell
   New-NetFirewallRule -DisplayName "WiVRn server" -Direction Inbound -Action Allow -Profile Any -Program "C:\path\to\WiVRn\build-win\server\wivrn-server.exe"
   ```
+
+Direct IPv6 URLs use the **headset's** interface name, not the Windows interface index: `%25usb0` in the URI must become `%usb0` in the unbracketed resolver hostname. The client decodes the host before removing literal brackets because the pinned Boost.URL 1.89 `host_address()` asserts on encoded zone IDs. `client/test/server_uri_test.cpp` covers named/numeric scopes, unscoped literals, IPv4 and DNS names; build the `wivrn-server-uri-test` target in a native Debug client build to retain the library assertions.
 
 ### Connecting over the network
 

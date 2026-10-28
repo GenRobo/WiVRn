@@ -21,10 +21,10 @@ package org.meumeu.wivrn.vivarium
 import org.meumeu.wivrn.MainActivity
 
 /**
- * The Vivarium camera module as the C++ client drives it (client/vivarium/sensors.cpp):
- * created once per stream session when the "Vivarium camera" setting is on, [start]ed
- * once the camera permissions are granted and [stop]ped when the session ends. Camera
- * messages go out through [MainActivity.sendAppData]; the PC's bytes come back through
+ * Sensor streaming as the C++ client drives it (client/vivarium/sensors.cpp):
+ * created once per session with any sensor enabled, [start]ed with the local settings
+ * and [stop]ped when the session ends. Only image capture needs camera permissions.
+ * Messages go out through [MainActivity.sendAppData]; the PC's bytes come back through
  * the channel listener; the PC's depth request goes to the C++ depth sender.
  */
 class VivariumCamera(private val activity: MainActivity) {
@@ -34,14 +34,21 @@ class VivariumCamera(private val activity: MainActivity) {
     /** Whether the camera permissions are granted; C++ requests them when not. */
     fun hasPermissions(): Boolean = hasCameraPermissions(activity)
 
-    /** Starts streaming; false when the camera cannot be opened (see the log). */
-    fun start(): Boolean {
+    /** Starts enabled sensors; camera metadata and capture are required only for images or markers. */
+    fun start(markerTracking: Boolean, rgbCameraStreaming: Boolean, depthCameraStreaming: Boolean): Boolean {
         if (stream != null) return true
-        val s = CameraStream(activity, { bytes -> activity.sendAppData(StreamFormat.CHANNEL, bytes) })
+        val s = CameraStream(
+            activity,
+            { bytes -> activity.sendAppData(StreamFormat.CHANNEL, bytes) },
+            ::configureDepth,
+            markerTracking,
+            rgbCameraStreaming,
+            depthCameraStreaming,
+        )
         try {
             if (!s.start()) return false
         } catch (error: Exception) {
-            android.util.Log.e("VivariumCamera", "capture startup failed", error)
+            android.util.Log.e("SensorStreaming", "sensor startup failed", error)
             s.stop()
             return false
         }
@@ -54,6 +61,9 @@ class VivariumCamera(private val activity: MainActivity) {
         activity.setAppDataListener(StreamFormat.CHANNEL, null)
         stream?.stop()
         stream = null
+        configureDepth(false, 0, false)
     }
 
+    /** The PC's depth request, applied by the C++ depth sender on the render thread. */
+    private external fun configureDepth(enabled: Boolean, rateHz: Int, bootClock: Boolean)
 }

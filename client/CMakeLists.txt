@@ -101,6 +101,8 @@ if(ANDROID)
     endif()
 else()
     add_executable(wivrn)
+    add_executable(wivrn-server-uri-test EXCLUDE_FROM_ALL test/server_uri_test.cpp)
+    target_link_libraries(wivrn-server-uri-test PRIVATE Boost::url)
 
     if (WIVRN_USE_SYSTEM_OPENXR)
         target_link_libraries(wivrn OpenXR::openxr_loader OpenXR::headers)

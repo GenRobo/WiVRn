@@ -79,4 +79,17 @@ class LatestFrameTest {
         assertArrayEquals(byteArrayOf(1, 2, 3, 4, 5, 6), copied)
         assertEquals(0, plane.position())
     }
+
+    @Test
+    fun copyLumaPreservesPlaneWindowForColorEncoding() {
+        val frame = LumaFrame(0, 3, 2)
+        val plane = ByteBuffer.wrap(byteArrayOf(99, 1, 2, 3, 0, 0, 4, 5, 6, 99))
+        plane.position(1)
+        plane.limit(9)
+        frame.copyLuma(plane, rowStride = 5)
+        val copied = ByteArray(6).also { frame.pixels.rewind(); frame.pixels.get(it) }
+        assertArrayEquals(byteArrayOf(1, 2, 3, 4, 5, 6), copied)
+        assertEquals(1, plane.position())
+        assertEquals(9, plane.limit())
+    }
 }

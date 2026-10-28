@@ -347,7 +347,9 @@ const std::vector<config_field> & configuration::config_fields()
 	        scalar("codec", &configuration::codec),
 	        scalar("bit_depth", &configuration::bit_depth),
 	        scalar("usb_network", &configuration::usb_network),
-	        scalar("vivarium_camera", &configuration::vivarium_camera),
+	        scalar("marker_tracking", &configuration::marker_tracking),
+	        scalar("rgb_camera_streaming", &configuration::rgb_camera_streaming),
+	        scalar("depth_camera_streaming", &configuration::depth_camera_streaming),
 	};
 	return fields;
 }
