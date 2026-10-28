@@ -5,6 +5,7 @@ buildscript {
     }
     dependencies {
         classpath 'com.android.tools.build:gradle:8.13.0'
+        classpath 'org.jetbrains.kotlin:kotlin-gradle-plugin:2.0.21'
     }
 }
 
@@ -16,6 +17,7 @@ allprojects {
 }
 
 apply plugin: 'com.android.application'
+apply plugin: 'org.jetbrains.kotlin.android'
 
 
 import javax.inject.Inject
@@ -157,6 +159,25 @@ android {
                 useLegacyPackaging = use_asan
             }
         }
+        // Quest 3 and 3S are arm64; the OpenCV AAR's other ABIs would only grow the APK.
+        ndk {
+            abiFilters 'arm64-v8a'
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+    kotlinOptions {
+        jvmTarget = "17"
+    }
+
+    testOptions {
+        unitTests.all {
+            // Golden files shared with the Python receiver (vivarium-teleop).
+            it.systemProperty("cameraStreamGoldens", file("client/test/fixtures/camera_stream").absolutePath)
+        }
     }
 
     signingConfigs {
@@ -241,6 +262,9 @@ android {
 
             assets.srcDirs = ['assets', layout.buildDirectory.dir("assets")]
         }
+        test {
+            java.srcDirs = ['client/test/java']
+        }
     }
 
     externalNativeBuild {
@@ -257,4 +281,11 @@ android {
         tasks["generate${variant.name.capitalize()}Assets"].dependsOn "externalNativeBuild${variant.name.capitalize()}"
         tasks["merge${variant.name.capitalize()}Resources"].dependsOn "externalNativeBuild${variant.name.capitalize()}"
     }
+}
+
+dependencies {
+    // Vivarium camera module (client/java/org/meumeu/wivrn/vivarium): ArUco marker
+    // detection on the headset; Apache-2.0.
+    implementation 'org.opencv:opencv:4.14.0'
+    testImplementation 'junit:junit:4.13.2'
 }
