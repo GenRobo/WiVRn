@@ -222,6 +222,11 @@ struct audio_data
 	data_holder data;
 };
 
+// Application data channels: opaque byte streams between the headset and TCP sinks the server
+// connects to (see docs/configuration.md, "app-data"). Message framing belongs to the application.
+// A packet carries at most app_data_max_size bytes, senders split larger writes.
+static constexpr size_t app_data_max_size = 1024 * 1024;
+
 namespace from_headset
 {
 struct crypto_handshake
@@ -692,6 +697,12 @@ struct stop_application
 	uint32_t id;
 };
 
+struct app_data
+{
+	std::string channel;
+	std::vector<uint8_t> data;
+};
+
 // when changing this, also make sure there are handlers in wivrn_session, etc. or compilation will fail
 using packets = std::variant<
         crypto_handshake,
@@ -723,7 +734,8 @@ using packets = std::variant<
         get_running_applications,
         set_active_application,
         hid::input,
-        stop_application>;
+        stop_application,
+        app_data>;
 } // namespace from_headset
 
 namespace to_headset
@@ -937,6 +949,12 @@ struct running_applications
 	std::vector<application> applications;
 };
 
+struct app_data
+{
+	std::string channel;
+	std::vector<uint8_t> data;
+};
+
 using packets = std::variant<
         crypto_handshake,
         pin_check_2,
@@ -955,7 +973,8 @@ using packets = std::variant<
         stream_tab_change,
         application_list,
         application_icon,
-        running_applications>;
+        running_applications,
+        app_data>;
 } // namespace to_headset
 } // namespace wivrn
 
