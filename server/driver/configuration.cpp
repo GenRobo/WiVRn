@@ -28,8 +28,8 @@
 #include <fstream>
 #include <nlohmann/json.hpp>
 #include <random>
-#include <stdlib.h>
 #include <sstream>
+#include <stdlib.h>
 #include <string>
 
 #include "util/u_logging.h"
@@ -187,6 +187,26 @@ configuration::configuration()
 			{
 				for (const auto & i: *it)
 					application.push_back(i);
+			}
+		}
+
+		if (auto it = json.find("app-data"); it != json.end())
+		{
+			for (const auto & item: *it)
+			{
+				app_data_sink sink{.channel = item.at("channel")};
+				std::string connect = item.at("connect");
+				// host:port, [v6]:port or v6%zone:port (the zone may contain '%' and ':' only inside brackets)
+				auto colon = connect.rfind(':');
+				if (colon == std::string::npos or colon == 0 or colon + 1 == connect.size())
+					throw std::runtime_error("app-data: invalid \"connect\" address " + connect + ", expected host:port");
+				sink.host = connect.substr(0, colon);
+				sink.port = connect.substr(colon + 1);
+				if (sink.host.front() == '[' and sink.host.back() == ']')
+					sink.host = sink.host.substr(1, sink.host.size() - 2);
+				if (sink.channel.empty())
+					throw std::runtime_error("app-data: empty channel for " + connect);
+				app_data.push_back(std::move(sink));
 			}
 		}
 

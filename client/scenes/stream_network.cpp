@@ -169,6 +169,11 @@ void scenes::stream::operator()(to_headset::running_applications && apps)
 	*running_applications.lock() = std::move(apps);
 }
 
+void scenes::stream::operator()(to_headset::app_data && packet)
+{
+	application::dispatch_app_data(std::move(packet));
+}
+
 void scenes::stream::start_application(std::string appid)
 {
 	network_session->send_control(wivrn::from_headset::start_app{

@@ -386,6 +386,7 @@ std::shared_ptr<scenes::stream> scenes::stream::create(std::unique_ptr<wivrn_ses
 	}
 
 	self->network_thread = utils::named_thread("network_thread", &stream::process_packets, self.get());
+	application::set_app_data_session(self->network_session.get());
 
 	self->command_buffer = std::move(self->device.allocateCommandBuffers({
 	        .commandPool = *self->commandpool,
@@ -602,6 +603,8 @@ scenes::stream::~stream()
 
 	if (network_thread.joinable())
 		network_thread.join();
+
+	application::clear_app_data_session(network_session.get());
 }
 
 void scenes::stream::push_blit_handle(shard_accumulator * decoder, std::shared_ptr<shard_accumulator::blit_handle> handle)
