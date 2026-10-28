@@ -596,6 +596,9 @@ void scenes::stream::on_unfocused()
 
 scenes::stream::~stream()
 {
+#ifdef __ANDROID__
+	vivarium_sensors.reset();
+#endif
 	exit();
 
 	if (tracking_thread && tracking_thread->joinable())
@@ -826,6 +829,12 @@ bool scenes::stream::is_gui_interactable() const
 
 void scenes::stream::render(const XrFrameState & frame_state)
 {
+#ifdef __ANDROID__
+	if (not application::get_config().vivarium_camera or state_ == state::shutdown or not frame_state.shouldRender)
+		vivarium_sensors.reset();
+	else if (not vivarium_sensors)
+		vivarium_sensors = std::make_unique<vivarium::sensors>(instance, system, session, device, queue_family_index);
+#endif
 	if (state_ == state::shutdown)
 		application::pop_scene();
 
@@ -880,6 +889,10 @@ void scenes::stream::render(const XrFrameState & frame_state)
 	}
 
 	session.begin_frame();
+#ifdef __ANDROID__
+	if (vivarium_sensors)
+		vivarium_sensors->frame(frame_state.predictedDisplayTime);
+#endif
 
 	std::array<int, view_count> image_indices;
 

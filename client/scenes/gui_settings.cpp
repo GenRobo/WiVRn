@@ -35,6 +35,9 @@
 #include "xr/instance.h"
 #include "xr/session.h"
 #include "xr/system.h"
+#ifdef __ANDROID__
+#include "vivarium/sensors.h"
+#endif
 
 #include "imgui.h"
 
@@ -664,6 +667,25 @@ bool settings_tracking(const settings_context & ctx)
 		        .disabled_tooltip = disconnect_tip,
 		});
 	}
+
+#ifdef __ANDROID__
+	list.push_back({
+	        .id = "##vivarium_camera",
+	        .label = _C("setting name", "Vivarium camera"),
+	        .description = _("Stream the passthrough camera, detected markers and depth to the PC's Vivarium receiver."),
+	        .ui = ui_kind::toggle,
+	        .get_bool = [&config] { return config.vivarium_camera; },
+	        .set_bool = [&config](bool v) {
+		        config.vivarium_camera = v;
+		        config.save();
+		        if (v)
+			        vivarium::request_permissions();
+	        },
+	        .default_bool = default_config.vivarium_camera,
+	        .enabled = [&ctx] { return not ctx.in_game; },
+	        .disabled_tooltip = disconnect_tip,
+	});
+#endif
 
 	ui::page_header(_cS("page header title", "Tracking"), _cS("page header subtitle", "Body and input tracking sent to the PC."));
 	render_settings(ctx, "##tracking", list);

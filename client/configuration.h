@@ -123,6 +123,9 @@ public:
 
 	std::string locale;
 
+	// Vivarium camera module: stream the passthrough camera, markers and depth to the PC
+	bool vivarium_camera = false;
+
 	bool check_feature(feature f) const;
 	void set_feature(feature f, bool state);
 
