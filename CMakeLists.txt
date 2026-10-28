@@ -105,7 +105,9 @@ if(ENABLE_COLOURED_OUTPUT)
 	endif()
 endif()
 
-find_package(PkgConfig REQUIRED)
+if (NOT WIN32)
+    find_package(PkgConfig REQUIRED)
+endif()
 find_package(Vulkan REQUIRED)
 find_package(Git)
 if (NEED_COMMON)
@@ -113,7 +115,10 @@ if (NEED_COMMON)
 endif()
 include(VulkanVersion)
 
-if (WIVRN_USE_SYSTEM_BOOST AND NEED_COMMON)
+if (WIN32 AND NEED_COMMON)
+    # Windows headless server: only Boost.PFR (header-only) is used by the server/common code that is built
+    find_package(boost_pfr CONFIG REQUIRED)
+elseif (WIVRN_USE_SYSTEM_BOOST AND NEED_COMMON)
     if (WIVRN_BUILD_DISSECTOR OR WIVRN_BUILD_CLIENT)
         find_package(Boost 1.84.0 REQUIRED COMPONENTS locale url iostreams)
     else()
@@ -122,7 +127,9 @@ if (WIVRN_USE_SYSTEM_BOOST AND NEED_COMMON)
 endif()
 
 if (WIVRN_BUILD_SERVER)
-    find_program(GDBUS_CODEGEN gdbus-codegen REQUIRED)
+    if (NOT WIN32)
+        find_program(GDBUS_CODEGEN gdbus-codegen REQUIRED)
+    endif()
     if (Vulkan_VERSION  VERSION_LESS "1.4.304")
         message(FATAL_ERROR "Vulkan version must be at least 1.4.304, found ${Vulkan_VERSION}")
     endif()
@@ -137,24 +144,34 @@ if (WIVRN_BUILD_SERVER)
     endif()
 
     if (WIVRN_USE_X264)
-        pkg_check_modules(X264 REQUIRED IMPORTED_TARGET x264)
+        if (WIN32)
+            find_path(X264_INCLUDE_DIR x264.h REQUIRED)
+            find_library(X264_LIBRARY NAMES libx264 x264 REQUIRED)
+            add_library(PkgConfig::X264 UNKNOWN IMPORTED)
+            set_target_properties(PkgConfig::X264 PROPERTIES IMPORTED_LOCATION "${X264_LIBRARY}" INTERFACE_INCLUDE_DIRECTORIES "${X264_INCLUDE_DIR}")
+        else()
+            pkg_check_modules(X264 REQUIRED IMPORTED_TARGET x264)
+        endif()
     endif()
 
     if (WIVRN_USE_PIPEWIRE)
         pkg_check_modules(libpipewire REQUIRED IMPORTED_TARGET libpipewire-0.3)
     endif()
 
-    pkg_check_modules(AVAHI REQUIRED IMPORTED_TARGET avahi-client avahi-glib)
+    if (NOT WIN32)
+        pkg_check_modules(AVAHI REQUIRED IMPORTED_TARGET avahi-client avahi-glib)
+    endif()
     find_package(Eigen3 REQUIRED)
     find_package(nlohmann_json REQUIRED)
     find_package(CLI11 REQUIRED)
 
-    pkg_check_modules(glib2 REQUIRED IMPORTED_TARGET glib-2.0 gio-2.0 gio-unix-2.0)
-
-    pkg_check_modules(libnotify REQUIRED IMPORTED_TARGET libnotify)
+    if (NOT WIN32)
+        pkg_check_modules(glib2 REQUIRED IMPORTED_TARGET glib-2.0 gio-2.0 gio-unix-2.0)
+        pkg_check_modules(libnotify REQUIRED IMPORTED_TARGET libnotify)
+    endif()
 endif()
 
-if (WIVRN_BUILD_DASHBOARD OR WIVRN_BUILD_SERVER)
+if (WIVRN_BUILD_DASHBOARD OR (WIVRN_BUILD_SERVER AND NOT WIN32))
     pkg_check_modules(librsvg-2.0 REQUIRED IMPORTED_TARGET librsvg-2.0)
     find_package(LibArchive REQUIRED)
     find_package(PNG REQUIRED)
@@ -334,6 +351,11 @@ add_subdirectory(tools)
 
 foreach(TARGET_NAME wivrn wivrn-server wivrn-dashboard wivrn-common wivrn-dissector wivrnctl)
     if(TARGET ${TARGET_NAME})
+        if (MSVC)
+            # MSVC: UTF-8 sources, permissive-free C++23, quiet the noisiest warnings
+            target_compile_options(${TARGET_NAME} PRIVATE /utf-8 /W3 /wd4244 /wd4267 /wd4305 /wd4996 /bigobj)
+            target_compile_definitions(${TARGET_NAME} PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN _USE_MATH_DEFINES _CRT_SECURE_NO_WARNINGS)
+        else()
         target_compile_options(${TARGET_NAME} PRIVATE
             -fdiagnostics-color -Wall -Wextra -pedantic
             -ffast-math
@@ -346,6 +368,7 @@ foreach(TARGET_NAME wivrn wivrn-server wivrn-dashboard wivrn-common wivrn-dissec
             $<$<COMPILE_LANG_AND_ID:CXX,GNU>:-Wno-volatile -Wno-array-bounds>
             $<$<COMPILE_LANG_AND_ID:CXX,Clang>:-Wno-deprecated-volatile -Wno-unneeded-internal-declaration -Wno-c99-extensions -Wno-unused-private-field>
         )
+        endif()
 
         if (WIVRN_WERROR)
             target_compile_options(${TARGET_NAME} PRIVATE -Werror)

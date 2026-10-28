@@ -1,0 +1,18 @@
+# Portable replacement for `hexdump -ve '/4 "0x%02X, "'`: writes a SPIR-V file as a list of
+# little-endian 32-bit words. Usage: cmake -DIN=<file.spv> -DOUT=<file> -P SpvToInc.cmake
+file(READ "${IN}" _hex HEX)
+string(LENGTH "${_hex}" _len)
+set(_out "")
+set(_i 0)
+while(_i LESS _len)
+    string(SUBSTRING "${_hex}" ${_i} 8 _w)
+    string(SUBSTRING "${_w}" 6 2 _b3)
+    string(SUBSTRING "${_w}" 4 2 _b2)
+    string(SUBSTRING "${_w}" 2 2 _b1)
+    string(SUBSTRING "${_w}" 0 2 _b0)
+    string(TOUPPER "0x${_b3}${_b2}${_b1}${_b0}, " _word)
+    string(REPLACE "0X" "0x" _word "${_word}")
+    string(APPEND _out "${_word}")
+    math(EXPR _i "${_i} + 8")
+endwhile()
+file(WRITE "${OUT}" "${_out}")

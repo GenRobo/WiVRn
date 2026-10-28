@@ -1,4 +1,6 @@
-if (WIVRN_USE_SYSTEM_BOOST)
+if (WIN32)
+    # Boost::pfr comes from vcpkg's boost-pfr config package (top-level CMakeLists)
+elseif (WIVRN_USE_SYSTEM_BOOST)
     add_library(Boost::pfr ALIAS Boost::headers)
 else()
     set(BOOST_INCLUDE_LIBRARIES locale url pfr iostreams)
@@ -26,7 +28,7 @@ add_library(wivrn-common STATIC EXCLUDE_FROM_ALL
     vk/vk_mem_alloc.cpp
 )
 
-if (WIVRN_BUILD_DASHBOARD OR WIVRN_BUILD_SERVER)
+if (WIVRN_BUILD_DASHBOARD OR (WIVRN_BUILD_SERVER AND NOT WIN32))
     add_library(wivrn-common-server STATIC EXCLUDE_FROM_ALL
         application.cpp
         utils/flatpak.cpp
@@ -78,3 +80,8 @@ endif()
 target_include_directories(wivrn-common-base PUBLIC ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_BINARY_DIR})
 target_link_libraries(wivrn-common PUBLIC Boost::pfr OpenSSL::Crypto wivrn-external wivrn-common-base)
 target_compile_definitions(wivrn-common PUBLIC VULKAN_HPP_NO_STRUCT_CONSTRUCTORS)
+if (WIN32)
+    target_link_libraries(wivrn-common PUBLIC ws2_32)
+    target_compile_definitions(wivrn-common-base PUBLIC NOMINMAX WIN32_LEAN_AND_MEAN _USE_MATH_DEFINES _CRT_SECURE_NO_WARNINGS)
+    target_compile_options(wivrn-common-base PUBLIC /utf-8 /Zc:preprocessor "$<$<COMPILE_LANGUAGE:CXX>:/FI${CMAKE_CURRENT_SOURCE_DIR}/win_compat.h>")
+endif()

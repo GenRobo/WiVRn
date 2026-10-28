@@ -1,6 +1,12 @@
 set(_THIS_MODULE_BASE_DIR "${CMAKE_CURRENT_LIST_DIR}")
 
-find_program(HEXDUMP hexdump REQUIRED)
+if (NOT WIN32)
+    find_program(HEXDUMP hexdump REQUIRED)
+endif()
+if (WIVRN_OPTIMIZE_SHADERS)
+    # Full path: on Windows spirv-opt comes from vcpkg's tools directory, which is not on PATH
+    find_program(SPIRV_OPT spirv-opt REQUIRED)
+endif()
 
 function(compile_glsl_aux shader_stage shader_name glsl_filename output target_env)
 
@@ -30,7 +36,7 @@ function(compile_glsl_aux shader_stage shader_name glsl_filename output target_e
     if (WIVRN_OPTIMIZE_SHADERS)
         add_custom_command(
             OUTPUT "${SPV_FILE}-opt"
-            COMMAND spirv-opt --target-env=${target_env} -O "${SPV_FILE}-nopt" -o "${SPV_FILE}-opt"
+            COMMAND ${SPIRV_OPT} --target-env=${target_env} -O "${SPV_FILE}-nopt" -o "${SPV_FILE}-opt"
             DEPENDS "${SPV_FILE}-nopt"
             VERBATIM
         )
@@ -38,6 +44,14 @@ function(compile_glsl_aux shader_stage shader_name glsl_filename output target_e
     else()
         set(_spv "${SPV_FILE}-nopt")
     endif()
+    if (WIN32)
+        add_custom_command(
+            OUTPUT "${SPV_FILE}"
+            COMMAND ${CMAKE_COMMAND} -DIN=${_spv} -DOUT=${SPV_FILE} -P "${_THIS_MODULE_BASE_DIR}/SpvToInc.cmake"
+            DEPENDS "${_spv}" "${_THIS_MODULE_BASE_DIR}/SpvToInc.cmake"
+            VERBATIM
+        )
+    else()
     set(_format "/4 \"0x%02X, \"")
     add_custom_command(
         OUTPUT "${SPV_FILE}"
@@ -45,6 +59,7 @@ function(compile_glsl_aux shader_stage shader_name glsl_filename output target_e
         DEPENDS "${_spv}"
         VERBATIM
     )
+    endif()
 
     get_source_file_property(deps "${output}" OBJECT_DEPENDS)
     if (deps)

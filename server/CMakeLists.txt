@@ -70,7 +70,10 @@ set(XRT_INSTALL_SYSTEMD_UNIT_FILES   OFF)
 set(BUILD_DOC                        OFF)
 set(BUILD_TESTING                    OFF)
 
-set(XRT_HAVE_SYSTEM_CJSON            OFF)
+if (NOT WIN32)
+	# Windows: vcpkg's cJSON headers are on the include path, so use it (bundled copy would clash)
+	set(XRT_HAVE_SYSTEM_CJSON            OFF)
+endif()
 
 # Drive Monado's tracing from the same switch as WiVRn's: WIVRN_TRACE_MONADO builds Monado
 # with percetto so its u_trace markers join the WIVRN_TRACING session (system backend).
@@ -93,13 +96,7 @@ FetchContent_MakeAvailable(monado)
 if (WIVRN_BUILD_SERVER)
 	add_executable(wivrn-server
 			accept_connection.cpp
-			active_runtime.cpp
-			avahi_publisher.cpp
 			hostname.cpp
-			main.cpp
-			sleep_inhibitor.cpp
-			start_application.cpp
-			start_systemd_unit.cpp
 			ipc_server_cb.cpp
 			target_instance_wivrn.cpp
 			wivrn_ipc.cpp
@@ -132,7 +129,6 @@ if (WIVRN_BUILD_SERVER)
 			driver/wivrn_fb_face2_tracker.cpp
 			driver/wivrn_htc_face_tracker.cpp
 			driver/wivrn_generic_tracker.cpp
-			driver/wivrn_uinput.cpp
 			driver/wivrn_session.cpp
 			driver/wivrn_connection.cpp
 			driver/xrt_cast.cpp
@@ -141,6 +137,21 @@ if (WIVRN_BUILD_SERVER)
 			utils/wivrn_trace.cpp
 			utils/gpu_timestamp_pool.cpp
 		)
+	if (WIN32)
+		# Headless Windows supervisor: no D-Bus/Avahi/libnotify/systemd/fork, no app launcher, no uinput
+		target_sources(wivrn-server PRIVATE main_windows.cpp)
+		target_link_libraries(wivrn-server PRIVATE ws2_32)
+	else()
+		target_sources(wivrn-server PRIVATE
+			active_runtime.cpp
+			avahi_publisher.cpp
+			main.cpp
+			sleep_inhibitor.cpp
+			start_application.cpp
+			start_systemd_unit.cpp
+			driver/wivrn_uinput.cpp
+		)
+	endif()
 	target_compile_features(wivrn-server PRIVATE cxx_std_20)
 	target_compile_definitions(wivrn-server PRIVATE VULKAN_HPP_NO_CONSTRUCTORS)
 
@@ -217,6 +228,7 @@ if (WIVRN_BUILD_SERVER)
 		target_link_libraries(wivrn-server PRIVATE PkgConfig::libpipewire)
 	endif()
 
+	if (NOT WIN32)
 	# Generate dbus interface code as a separate target to avoid warnings in generated code
 	add_custom_command(OUTPUT wivrn_server_dbus.c wivrn_server_dbus.h
 			   COMMAND ${GDBUS_CODEGEN} ${CMAKE_CURRENT_SOURCE_DIR}/../dbus/io.github.wivrn.Server.xml --interface-prefix io.github.wivrn --generate-c-code wivrn_server_dbus --c-namespace Wivrn
@@ -241,6 +253,8 @@ if (WIVRN_BUILD_SERVER)
 	target_sources(wivrn-server-dbus PRIVATE
 		${CMAKE_CURRENT_BINARY_DIR}/systemd_manager.c ${CMAKE_CURRENT_BINARY_DIR}/systemd_manager.h
 		${CMAKE_CURRENT_BINARY_DIR}/systemd_unit.c ${CMAKE_CURRENT_BINARY_DIR}/systemd_unit.h)
+	target_link_libraries(wivrn-server PRIVATE PkgConfig::AVAHI wivrn-common-server)
+	endif()
 
 	target_link_libraries(
 		wivrn-server
@@ -257,10 +271,8 @@ if (WIVRN_BUILD_SERVER)
 			xrt-external-openxr
 			xrt-interfaces
 
-			PkgConfig::AVAHI
 			Eigen3::Eigen
 			wivrn-common
-			wivrn-common-server
 			wivrn-external
 			nlohmann_json::nlohmann_json
 		)
@@ -276,6 +288,7 @@ if (WIVRN_BUILD_SERVER)
 
 	target_compile_definitions(wivrn-server PRIVATE JSON_DIAGNOSTICS=1)
 
+	if (NOT WIN32)
 	configure_file(dist/wivrn.service.in wivrn.service)
 	install(FILES ${CMAKE_CURRENT_BINARY_DIR}/wivrn.service
 		DESTINATION lib/systemd/user/)
@@ -283,12 +296,18 @@ if (WIVRN_BUILD_SERVER)
 	install(FILES dist/firewalld-wivrn.xml
 		RENAME wivrn.xml
 		DESTINATION lib/firewalld/services)
+	endif()
 
 	install(TARGETS wivrn-server)
 endif()
 
 if (WIVRN_BUILD_SERVER_LIBRARY)
 	set_target_properties(${RUNTIME_TARGET} PROPERTIES EXCLUDE_FROM_ALL FALSE)
+	if (WIN32)
+		# Windows: build the OpenXR runtime DLL only; the build-tree dev manifest
+		# (openxr_wivrn-dev.json) points at it. No libmonado, no install-time manifest.
+		return()
+	endif()
 	set_target_properties(monado PROPERTIES EXCLUDE_FROM_ALL FALSE)
 
 	set(_extra_args)
