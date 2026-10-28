@@ -93,6 +93,7 @@ private:
 	std::array<std::atomic_unsigned_lock_free, num_slots> state = {idle, idle};
 	uint8_t present_slot = 0;
 	uint8_t encode_slot = 0;
+	int consecutive_skips = 0; // present_image thread only
 
 	std::mutex mutex;
 

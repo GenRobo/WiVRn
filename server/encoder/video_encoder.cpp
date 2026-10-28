@@ -27,7 +27,11 @@
 #include "utils/wivrn_trace.h"
 #include "wivrn_config.h"
 
+#include <atomic>
+#include <cinttypes>
 #include <string>
+
+#include "util/u_logging.h"
 
 #if WIVRN_USE_NVENC
 #include "video_encoder_nvenc.h"
@@ -46,6 +50,37 @@
 
 namespace wivrn
 {
+
+namespace
+{
+// Per-stream pipeline counters, logged every 5 s.
+struct stream_stats
+{
+	std::atomic<uint64_t> presented, skipped, encode_calls, encoded, empty, bytes, shards;
+};
+stream_stats stats[3];
+std::atomic<int64_t> next_stats_log_ns = 0;
+
+void maybe_log_stats()
+{
+	int64_t now = os_monotonic_get_ns();
+	int64_t next = next_stats_log_ns.load();
+	if (now < next or not next_stats_log_ns.compare_exchange_strong(next, now + 5'000'000'000))
+		return;
+	if (next == 0)
+		return; // first call only arms the timer
+	for (int i = 0; i < 3; ++i)
+	{
+		auto & s = stats[i];
+		uint64_t presented = s.presented.exchange(0), skipped = s.skipped.exchange(0), calls = s.encode_calls.exchange(0),
+		         encoded = s.encoded.exchange(0), empty = s.empty.exchange(0), bytes = s.bytes.exchange(0), shards = s.shards.exchange(0);
+		if (presented or calls or bytes)
+			U_LOG_I("encoder stream %d (5 s): presented %" PRIu64 ", skipped (waiting for headset ack) %" PRIu64 ", encode calls %" PRIu64
+			        ", frames produced %" PRIu64 ", empty %" PRIu64 ", sent %" PRIu64 " shards / %.2f Mbit/s",
+			        i, presented, skipped, calls, encoded, empty, shards, bytes * 8 / 5e6);
+	}
+}
+} // namespace
 
 video_encoder::sender::sender() :
         thread([this](std::stop_token t) {
@@ -215,6 +250,11 @@ video_encoder::~video_encoder()
 void video_encoder::on_feedback(const from_headset::feedback & feedback)
 {
 	assert(feedback.stream_index == stream_idx);
+	static std::atomic<int> logged[3];
+	if (logged[stream_idx % 3].fetch_add(1) < 5)
+		U_LOG_I("feedback stream %d frame %" PRIu64 ": received_last_packet %s, sent_to_decoder %s, displayed %s",
+		        int(stream_idx), feedback.frame_index,
+		        feedback.received_last_packet ? "yes" : "no", feedback.sent_to_decoder ? "yes" : "no", feedback.displayed ? "yes" : "no");
 	idr->on_feedback(feedback);
 }
 
@@ -239,11 +279,21 @@ void video_encoder::present_image(vk::Image y_cbcr, vk::SemaphoreSubmitInfo info
 	// Wait for encoder to be done
 	present_slot = (present_slot + 1) % num_slots;
 	state[present_slot].wait(busy);
+	stats[stream_idx % 3].presented++;
 	if (idr->should_skip(frame_index))
 	{
+		stats[stream_idx % 3].skipped++;
+		// The reference-tracking encoders (Vulkan Video) stop encoding until the headset acknowledges a
+		// frame (feedback.sent_to_decoder); make a stall visible instead of silent.
+		if (++consecutive_skips == 72)
+			U_LOG_W("encoder stream %d: no headset acknowledgement for 72 frames, encoding paused until feedback arrives (frame %" PRIu64 ")",
+			        int(stream_idx), frame_index);
 		state[present_slot] = skip;
 		return;
 	}
+	if (consecutive_skips >= 72)
+		U_LOG_I("encoder stream %d: resumed after %d skipped frames", int(stream_idx), consecutive_skips);
+	consecutive_skips = 0;
 	state[present_slot] = busy;
 	return present_image(y_cbcr, info, present_slot, frame_index);
 }
@@ -286,13 +336,18 @@ void video_encoder::encode(wivrn_session & cnx,
 	shard.view_info = view_info;
 	shard.timing_info.reset();
 
+	stats[stream_idx % 3].encode_calls++;
 	auto data = encode(encode_slot, frame_index);
 	if (data)
 	{
+		stats[stream_idx % 3].encoded++;
 		timing_info.encode_end = clock.to_headset(os_monotonic_get_ns());
 		assert(shared_sender);
 		shared_sender->push(std::move(*data));
 	}
+	else
+		stats[stream_idx % 3].empty++;
+	maybe_log_stats();
 }
 
 void video_encoder::SendData(std::span<uint8_t> data, bool end_of_frame, bool control)
@@ -312,6 +367,7 @@ void video_encoder::SendData(std::span<uint8_t> data, bool end_of_frame, bool co
 	}
 	if (video_dump)
 		video_dump.write((char *)data.data(), data.size());
+	stats[stream_idx % 3].bytes += data.size();
 
 	ssize_t max_payload_size = (cnx->has_stream() and not control) ? to_headset::video_stream_data_shard::max_payload_size : std::numeric_limits<uint32_t>::max();
 
@@ -339,6 +395,7 @@ void video_encoder::SendData(std::span<uint8_t> data, bool end_of_frame, bool co
 			// Ignore network errors
 		}
 		++shard.shard_idx;
+		stats[stream_idx % 3].shards++;
 		shard.view_info.reset();
 		begin = next;
 	}

@@ -184,7 +184,17 @@ void drain_control_channel()
 
 		std::visit(utils::overloaded{
 		                   [](const from_headset::headset_info_packet & info) {
-			                   std::cerr << "Headset info: " << info.system_name << std::endl;
+			                   static const char * names[] = {"h264", "h265", "av1", "raw"};
+			                   std::string codecs;
+			                   for (auto c: info.supported_codecs)
+				                   codecs += std::string(codecs.empty() ? "" : ", ") + (unsigned(c) < 4 ? names[c] : "?");
+			                   std::cerr << "Headset info: " << info.system_name
+			                             << "; decoders (preferred first): " << codecs
+			                             << "; bit depth: " << (info.bit_depth ? std::to_string(*info.bit_depth) : std::string("default"))
+			                             << "; stream eye " << info.stream_eye_width << "x" << info.stream_eye_height
+			                             << " (render " << info.render_eye_width << "x" << info.render_eye_height << ")"
+			                             << "; preferred " << info.settings.preferred_refresh_rate << " Hz, bitrate " << info.settings.bitrate_bps
+			                             << "; passthrough " << info.passthrough << std::endl;
 		                   },
 		                   [](const from_headset::settings_changed & s) {
 			                   std::cerr << "Headset settings: bitrate " << s.bitrate_bps << " bps, refresh " << s.preferred_refresh_rate << std::endl;
