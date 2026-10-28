@@ -50,6 +50,7 @@ class app_data_relay
 	std::deque<std::vector<uint8_t>> queue;
 	size_t queued_bytes = 0;
 	std::atomic<bool> connected = false;
+	std::atomic<bool> overflowed = false;
 
 	// Wakes the relay thread when the queue is filled (both ends of a datagram pair)
 	fd_base wake_sender;
