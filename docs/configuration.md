@@ -102,6 +102,24 @@ An application to start when connection with the headset is established, can be 
 ```
 Launch No Man's Sky in VR mode on Steam when connection with headset is established.
 
+## `app-data`
+Default value: unset
+
+Application data channels: byte streams between the headset app and TCP services on the server side, carried on the headset connection. A list of objects with
+* `channel`: the channel name, matched with what the headset app sends on and listens to (`MainActivity.sendAppData` / `setAppDataListener`, or `application::send_app_data` / `set_app_data_handler` in the C++ client);
+* `connect`: the sink's `host:port`, an IPv6 address in brackets.
+
+While a headset session is active, the server connects to each sink as a TCP client, retrying every 2 seconds, and relays the bytes in both directions: what the sink writes is delivered to the headset app on the channel, what the headset app sends on the channel is written to the sink. A channel is a plain byte stream, message framing belongs to the application; a packet carries at most 1 MiB, larger writes are split. While no sink is connected, data from the headset is dropped and counted. The server logs connections, disconnections and the byte counts per direction every 5 seconds.
+
+### Example
+```json
+{
+	"app-data": [
+		{ "channel": "vivarium-camera", "connect": "127.0.0.1:9760" }
+	]
+}
+```
+
 ## `tcp-only`
 Default value: `false`
 

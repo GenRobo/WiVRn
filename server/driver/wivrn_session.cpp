@@ -21,6 +21,7 @@
 #include "wivrn_session.h"
 
 #include "accept_connection.h"
+#include "app_data_relay.h"
 #ifndef _WIN32
 #include "application.h"
 #endif
@@ -286,6 +287,18 @@ wivrn::wivrn_session::wivrn_session(std::unique_ptr<wivrn_connection> connection
 			});
 		}
 	}
+
+	for (auto & sink: conf.app_data)
+	{
+		try
+		{
+			app_data_relays.push_back(std::make_unique<app_data_relay>(*this, sink));
+		}
+		catch (const std::exception & e)
+		{
+			U_LOG_E("app-data %s: cannot create relay: %s", sink.channel.c_str(), e.what());
+		}
+	}
 }
 
 wivrn_session::~wivrn_session()
@@ -299,6 +312,7 @@ wivrn_session::~wivrn_session()
 		xrt_device_destroy(&static_xdevs[i]);
 	}
 
+	app_data_relays.clear();
 	connection->shutdown();
 }
 
@@ -421,6 +435,9 @@ void wivrn_session::pause_session()
 	if (audio_handle)
 		audio_handle->pause();
 
+	for (auto & relay: app_data_relays)
+		relay->pause();
+
 	// FIXME: pause compositor
 
 	// Rotate this connection's trace before it pauses for reconnect.
@@ -435,6 +452,9 @@ void wivrn_session::resume_session()
 
 	if (audio_handle)
 		audio_handle->resume();
+
+	for (auto & relay: app_data_relays)
+		relay->resume();
 
 	// Tell the headset whether forwarded input devices are mirrored to uinput. The headset picks
 	// what to forward. The OpenXR gamepad at /user/gamepad is always available regardless.
@@ -980,6 +1000,20 @@ void wivrn_session::operator()(const from_headset::set_active_application & req)
 void wivrn_session::operator()(const from_headset::stop_application & req)
 {
 	stop_application(req.id, int64_t(10) * U_TIME_1S_IN_NS);
+}
+
+void wivrn_session::operator()(from_headset::app_data && packet)
+{
+	for (auto & relay: app_data_relays)
+	{
+		if (relay->channel() == packet.channel)
+		{
+			relay->from_headset(std::move(packet.data));
+			return;
+		}
+	}
+	if (app_data_unknown_channels.insert(packet.channel).second)
+		U_LOG_W("app-data: no sink configured for channel %s, dropping headset data", packet.channel.c_str());
 }
 
 void wivrn_session::operator()(audio_data && data)

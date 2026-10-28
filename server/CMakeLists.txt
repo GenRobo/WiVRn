@@ -113,6 +113,7 @@ if (WIVRN_BUILD_SERVER)
 			encoder/video_encoder.cpp
 			encoder/video_encoder_raw.cpp
 
+			driver/app_data_relay.cpp
 			driver/app_pacer.cpp
 			driver/clock_offset.cpp
 			driver/configuration.cpp

@@ -51,10 +51,19 @@ struct configuration
 		std::optional<std::string> device;
 	};
 
+	// Application data channel relayed to a TCP sink, see docs/configuration.md
+	struct app_data_sink
+	{
+		std::string channel;
+		std::string host;
+		std::string port;
+	};
+
 	std::array<encoder, 3> encoders; // left, right, alpha
 	std::optional<uint8_t> bit_depth;
 	std::optional<std::array<float, 3>> grip_surface;
 	std::vector<std::string> application;
+	std::vector<app_data_sink> app_data;
 	bool debug_gui = false;
 	bool use_steamvr_lh = false;
 	std::optional<int64_t> lh_max_extrapolation;

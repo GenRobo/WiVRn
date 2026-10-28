@@ -44,7 +44,9 @@
 #include <memory>
 #include <mutex>
 #include <optional>
+#include <set>
 #include <thread>
+#include <vector>
 
 struct b_system;
 struct ipc_server;
@@ -54,6 +56,7 @@ union xrt_session_event;
 
 namespace wivrn
 {
+class app_data_relay;
 class wivrn_eye_tracker;
 class wivrn_android_face_tracker;
 class wivrn_fb_face2_tracker;
@@ -105,6 +108,8 @@ class wivrn_session : public xrt_system_devices
 	beman::inplace_vector::inplace_vector<wivrn_generic_tracker, from_headset::htc_body::max_tracked_poses> generic_trackers;
 	std::optional<wivrn_uinput> uinput_handler;
 	bool gamepad_connected = false; // network thread only
+	std::vector<std::unique_ptr<app_data_relay>> app_data_relays;
+	std::set<std::string> app_data_unknown_channels; // network thread only
 
 	clock_offset_estimator offset_est;
 	std::atomic<XrDuration> tracking_latency; // production to reception time
@@ -188,6 +193,7 @@ public:
 	void operator()(const from_headset::get_running_applications &);
 	void operator()(const from_headset::set_active_application &);
 	void operator()(const from_headset::stop_application &);
+	void operator()(from_headset::app_data &&);
 	void operator()(audio_data &&);
 
 	void operator()(to_monado::stop &&);
