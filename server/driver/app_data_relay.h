@@ -64,7 +64,7 @@ class app_data_relay
 	void run(std::stop_token stop);
 	TCP connect(std::stop_token stop);
 	void serve(std::stop_token stop, TCP & tcp);
-	bool flush_queue(TCP & tcp);
+	bool flush_queue(std::stop_token stop, TCP & tcp);
 	void drop_queue();
 	void log_counters();
 

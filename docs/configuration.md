@@ -111,6 +111,8 @@ Application data channels: byte streams between the headset app and TCP services
 
 While a headset session is active, the server connects to each sink as a TCP client, retrying every 2 seconds, and relays the bytes in both directions: what the sink writes is delivered to the headset app on the channel, what the headset app sends on the channel is written to the sink. A channel is a plain byte stream, message framing belongs to the application; a packet carries at most 1 MiB, larger writes are split. While no sink is connected, data from the headset is dropped and counted. The server logs connections, disconnections and the byte counts per direction every 5 seconds.
 
+Headset-to-sink data uses a bounded 16 MiB queue; overflow is dropped and counted rather than blocking the tracking/network thread. Sink writes are non-blocking and stop-aware, so a stalled receiver cannot prevent session shutdown. Closing the local TCP connection discards queued data; the next connection starts a new byte stream. Consumers must reset their framing state on reconnect.
+
 ### Example
 ```json
 {
