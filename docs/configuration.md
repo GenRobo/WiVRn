@@ -202,3 +202,23 @@ Change the TCP/UDP port used for the connection.
 Default value: unset
 
 If set, overrides the name displayed in the server list.
+
+## Vivarium headset sensors (Android fork)
+
+The headset's **Tracking → Vivarium camera** setting is off by default and saved
+in the client configuration. Enable it in the lobby and grant Camera and Headset
+Camera access. Capture runs only in a visible WiVRn streaming session; ending
+the session or hiding the app closes the camera and releases the depth provider.
+The PC receiver uses the `vivarium-camera` application data channel, for example
+`"app-data": [{"channel": "vivarium-camera", "connect": "127.0.0.1:9760"}]`.
+No camera app, separate camera TCP connection, or ADB reverse is needed.
+
+The left passthrough camera produces grayscale JPEG frames and on-headset OpenCV
+4.14 ArUco detections in VCAM version 1. CONFIGURE controls image and detection
+rates; PING/PONG uses the camera timestamp source's headset clock. LINK_STATUS
+reports route `2` (WiVRn) with Android's active-network transport. A receiver
+should resend its current CONFIGURE on its first CALIBRATION per TCP connection,
+including after delayed permission prompts. CONFIGURE always refreshes calibration,
+without an echo loop. Sensor messages are serialized before transport
+chunking, so concurrent JPEG, markers, status and depth cannot interleave bytes.
+

@@ -37,6 +37,9 @@
 #include <shared_mutex>
 #include <thread>
 #include <vulkan/vulkan_core.h>
+#ifdef __ANDROID__
+#include "vivarium/sensors.h"
+#endif
 
 namespace scenes
 {
@@ -69,6 +72,9 @@ private:
 	};
 
 	wifi_lock::wifi wifi;
+#ifdef __ANDROID__
+	std::unique_ptr<vivarium::sensors> vivarium_sensors;
+#endif
 
 	// for frames inside accumulator images
 	std::mutex frames_mutex;

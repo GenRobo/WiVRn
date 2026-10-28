@@ -36,6 +36,15 @@
     <!-- Required for WiFi locking, see https://developer.android.com/reference/android/net/wifi/WifiManager.WifiLock -->
     <uses-permission android:name="android.permission.WAKE_LOCK" />
 
+    <!-- Vivarium camera module: the headset's passthrough cameras (Horizon OS v74+) and the
+         depth sensor (XR_META_environment_depth, spatial data permission). Both are runtime
+         permissions requested when the "Vivarium camera" setting is first turned on. -->
+    <uses-feature android:name="android.hardware.camera" android:required="false" />
+    <uses-feature android:name="android.hardware.camera2.any" android:required="false" />
+    <uses-permission android:name="android.permission.CAMERA" />
+    <uses-permission android:name="horizonos.permission.HEADSET_CAMERA" />
+    <uses-permission android:name="com.oculus.permission.USE_SCENE" />
+
     <!-- Allow starting the application even without controllers -->
     <uses-feature android:name="oculus.software.handtracking" android:required="false" />
     <uses-feature android:name="oculus.software.eye_tracking" android:required="false" />

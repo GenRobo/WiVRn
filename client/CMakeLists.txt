@@ -79,6 +79,7 @@ if(ANDROID)
         "android/*.cpp"
         "audio/android/*.cpp"
         "decoder/android/*.cpp"
+        "vivarium/*.cpp"
         )
     target_sources(wivrn PRIVATE ${PLATFORM_SOURCE})
 
