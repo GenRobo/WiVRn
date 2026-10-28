@@ -25,6 +25,23 @@
 #include "utils/wivrn_trace.h"
 #include "utils/wivrn_vk_bundle.h"
 
+#ifdef _WIN32
+// Only the C declarations of VK_KHR_external_memory_win32 are needed. VK_USE_PLATFORM_WIN32_KHR is
+// deliberately not defined: it would change vulkan.hpp's inline dispatcher code in this TU only
+// (ODR), and the raii dispatcher built in wivrn_vk_bundle.cpp does not load the Win32 entry points.
+#include <windows.h>
+#include <vulkan/vulkan_win32.h>
+#endif
+
+#include <algorithm>
+#include <cassert>
+#include <format>
+#include <stdexcept>
+#include <string>
+#include <vector>
+
+// The Windows SDK (guiddef.h, pulled in by nvEncodeAPI.h) already provides operator==(REFGUID, REFGUID)
+#ifndef _SYS_GUID_OPERATOR_EQ_
 bool operator==(const GUID & l, const GUID & r)
 {
 	return l.Data1 == r.Data1 and
@@ -32,9 +49,7 @@ bool operator==(const GUID & l, const GUID & r)
 	       l.Data3 == r.Data3 and
 	       std::ranges::equal(l.Data4, r.Data4);
 }
-
-#include <algorithm>
-#include <stdexcept>
+#endif
 
 #define NVENC_CHECK_NOENCODER(x)                                          \
 	do                                                                \
@@ -199,13 +214,22 @@ video_encoder_nvenc::video_encoder_nvenc(
 	auto encodeGUID = encode_guid(settings.codec);
 	check_encode_guid_supported(shared_state, session_handle, encodeGUID);
 
+#if defined(__GNUC__)
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wdeprecated-declarations"
+#elif defined(_MSC_VER)
+#pragma warning(push)
+#pragma warning(disable : 4996)
+#endif
 	GUID presetGUID = NV_ENC_PRESET_P4_GUID;
 	check_preset_guid_supported(shared_state, session_handle, encodeGUID, presetGUID);
 
 	NV_ENC_TUNING_INFO tuningInfo = NV_ENC_TUNING_INFO_ULTRA_LOW_LATENCY;
+#if defined(__GNUC__)
 #pragma GCC diagnostic pop
+#elif defined(_MSC_VER)
+#pragma warning(pop)
+#endif
 	NV_ENC_PRESET_CONFIG preset_config{
 	        .version = NV_ENC_PRESET_CONFIG_VER,
 	        .presetCfg = {
@@ -341,13 +365,23 @@ video_encoder_nvenc::video_encoder_nvenc(
 
 	vk::DeviceSize buffer_size = extent.width * extent.height * bytesPerPixel * 3 / 2;
 
+#ifdef _WIN32
+	constexpr auto external_handle_type = vk::ExternalMemoryHandleTypeFlagBits::eOpaqueWin32;
+	// Not loaded by the raii dispatcher (VK_USE_PLATFORM_WIN32_KHR is not defined where the device is created)
+	auto get_memory_win32_handle = reinterpret_cast<PFN_vkGetMemoryWin32HandleKHR>(vk.device.getProcAddr("vkGetMemoryWin32HandleKHR"));
+	if (!get_memory_win32_handle)
+		throw std::runtime_error("nvenc: vkGetMemoryWin32HandleKHR not available");
+#else
+	constexpr auto external_handle_type = vk::ExternalMemoryHandleTypeFlagBitsKHR::eOpaqueFd;
+#endif
+
 	vk::StructureChain buffer_create_info{
 	        vk::BufferCreateInfo{
 	                .size = buffer_size,
 	                .usage = vk::BufferUsageFlagBits::eTransferDst,
 	        },
 	        vk::ExternalMemoryBufferCreateInfo{
-	                .handleTypes = vk::ExternalMemoryHandleTypeFlagBitsKHR::eOpaqueFd,
+	                .handleTypes = external_handle_type,
 	        },
 	};
 
@@ -366,22 +400,47 @@ video_encoder_nvenc::video_encoder_nvenc(
 		                .buffer = *i.yuv,
 		        },
 		        vk::ExportMemoryAllocateInfo{
-		                .handleTypes = vk::ExternalMemoryHandleTypeFlagBitsKHR::eOpaqueFd,
+		                .handleTypes = external_handle_type,
 		        },
 		};
 		i.mem = vk.device.allocateMemory(mem_info.get());
 		vk.name(i.mem, "nvenc memory");
 		i.yuv.bindMemory(*i.mem, 0);
 
+#ifdef _WIN32
+		const VkMemoryGetWin32HandleInfoKHR handle_info{
+		        .sType = VK_STRUCTURE_TYPE_MEMORY_GET_WIN32_HANDLE_INFO_KHR,
+		        .pNext = nullptr,
+		        .memory = static_cast<VkDeviceMemory>(*i.mem),
+		        .handleType = VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_WIN32_BIT,
+		};
+		HANDLE win32_handle = nullptr;
+		if (VkResult res = get_memory_win32_handle(static_cast<VkDevice>(*vk.device), &handle_info, &win32_handle); res != VK_SUCCESS)
+			throw std::runtime_error("nvenc: vkGetMemoryWin32HandleKHR failed: " + std::to_string(static_cast<int>(res)));
+#else
 		int fd = vk.device.getMemoryFdKHR({
 		        .memory = *i.mem,
 		        .handleType = vk::ExternalMemoryHandleTypeFlagBitsKHR::eOpaqueFd,
 		});
+#endif
 
 		CUdeviceptr frame;
 		CU_CHECK(shared_state->cuda_fn->cuCtxPushCurrent(shared_state->cuda));
 		{
 			CUexternalMemory extmem;
+#ifdef _WIN32
+			CUDA_EXTERNAL_MEMORY_HANDLE_DESC mem_handle_params{
+			        .type = CU_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_WIN32,
+			        .handle = {.win32 = {.handle = win32_handle, .name = nullptr}},
+			        .size = memory_req.size,
+			        .flags = 0,
+			};
+			// Unlike opaque fds, CUDA does not take ownership of NT handles: the import holds its own
+			// reference, so close ours whether or not the import succeeded.
+			CUresult import_status = shared_state->cuda_fn->cuImportExternalMemory(&extmem, &mem_handle_params);
+			CloseHandle(win32_handle);
+			CU_CHECK(import_status);
+#else
 			CUDA_EXTERNAL_MEMORY_HANDLE_DESC mem_handle_params{
 			        .type = CU_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_FD,
 			        .handle = {.fd = fd},
@@ -389,6 +448,7 @@ video_encoder_nvenc::video_encoder_nvenc(
 			        .flags = 0,
 			};
 			CU_CHECK(shared_state->cuda_fn->cuImportExternalMemory(&extmem, &mem_handle_params));
+#endif
 
 			CUDA_EXTERNAL_MEMORY_BUFFER_DESC ext_map_params{
 			        .offset = 0,

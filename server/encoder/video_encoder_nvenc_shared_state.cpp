@@ -20,7 +20,9 @@
 #include "video_encoder_nvenc_shared_state.h"
 #include "util/u_logging.h"
 
-#include <bits/unique_lock.h>
+#include <mutex>
+#include <stdexcept>
+#include <string>
 
 void video_encoder_nvenc_shared_state::deleter::operator()(CudaFunctions * fn)
 {
