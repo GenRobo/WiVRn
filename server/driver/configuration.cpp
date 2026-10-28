@@ -29,6 +29,7 @@
 #include <nlohmann/json.hpp>
 #include <random>
 #include <stdlib.h>
+#include <sstream>
 #include <string>
 
 #include "util/u_logging.h"
@@ -299,11 +300,21 @@ std::string to_iso8601(std::chrono::zoned_time<T> timestamp)
 
 std::optional<std::chrono::system_clock::time_point> from_iso8601(const std::string & timestamp)
 {
+#ifdef _WIN32
+	// No strptime on Windows
+	std::istringstream in(timestamp);
+	std::chrono::sys_seconds tp;
+	in >> std::chrono::parse("%FT%H:%M:%S%z", tp);
+	if (in.fail())
+		return std::nullopt;
+	return tp;
+#else
 	tm t;
 	if (strptime(timestamp.c_str(), "%FT%H:%M:%S%z", &t) == nullptr)
 		return std::nullopt;
 
 	return std::chrono::system_clock::from_time_t(mktime(&t));
+#endif
 }
 
 std::vector<headset_key> known_keys()
@@ -359,10 +370,16 @@ static void save_keys(const std::vector<headset_key> & keys)
 	std::filesystem::path known_keys_file_new = known_keys_file;
 	known_keys_file_new += ".new";
 
-	std::ofstream file(known_keys_file_new);
-	file.write(json_str.data(), json_str.size());
-
 	std::error_code ec;
+	// The config directory may not exist yet (first pairing on a fresh install / Windows)
+	std::filesystem::create_directories(known_keys_file.parent_path(), ec);
+
+	{
+		// Closed before the rename: Windows can't rename a file that is still open
+		std::ofstream file(known_keys_file_new, std::ios::binary);
+		file.write(json_str.data(), json_str.size());
+	}
+
 	std::filesystem::rename(known_keys_file_new, known_keys_file, ec);
 
 	if (ec)

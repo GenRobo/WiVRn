@@ -26,6 +26,11 @@ std::filesystem::path xdg_config_home()
 	if (const char * xdg_config_home = std::getenv("XDG_CONFIG_HOME"))
 		return xdg_config_home;
 
+#ifdef _WIN32
+	// %APPDATA%\wivrn\config.json (HOME is not normally set on Windows)
+	if (const char * appdata = std::getenv("APPDATA"))
+		return appdata;
+#endif
 	if (const char * home = std::getenv("HOME"))
 		return std::filesystem::path(home) / ".config";
 
@@ -37,6 +42,10 @@ std::filesystem::path xdg_cache_home()
 	if (const char * xdg_cache_home = std::getenv("XDG_CACHE_HOME"))
 		return xdg_cache_home;
 
+#ifdef _WIN32
+	if (const char * local_appdata = std::getenv("LOCALAPPDATA"))
+		return local_appdata;
+#endif
 	if (const char * home = std::getenv("HOME"))
 		return std::filesystem::path(home) / ".cache";
 
