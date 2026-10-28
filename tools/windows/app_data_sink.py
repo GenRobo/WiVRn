@@ -5,7 +5,7 @@
 #       byte writes at <rate> writes per second and records what it receives in <out-prefix>-<n>.bin.
 #       With --restart-after, the first connection and the listener are closed after S seconds and the
 #       sink listens again 3 s later, to test the relay's reconnection.
-#       With --stall-first S, the first connection sends its payload but does not read for S seconds;
+#       With --stall-first S, the first connection neither sends nor reads for S seconds;
 #       the relay must end that stream on queue overflow and reconnect without splicing byte gaps.
 #   app_data_sink.py check <sent> <chunk> <received>...
 #       Checks that each <received> file is a contiguous, <chunk> aligned slice of <sent> repeated,
@@ -56,7 +56,7 @@ def serve(args):
             if restart_after is not None and connection == 1 and now - started >= restart_after:
                 print(f"sink: closing connection {connection} after {restart_after} s to test reconnection", flush=True)
                 break
-            if sent < len(payload) and now >= next_send:
+            if sent < len(payload) and now >= next_send and not (stall_first and connection == 1):
                 next_send += 1 / rate
                 piece = payload[sent:sent + chunk]
                 client.setblocking(True)

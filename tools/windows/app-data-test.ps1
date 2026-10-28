@@ -85,11 +85,14 @@ $failed = 0
 $sinkPayload = [IO.File]::ReadAllBytes("$Out\sink.bin")
 $probeReceived = [IO.File]::ReadAllBytes("$Out\probe-received.bin")
 $connections = (Get-ChildItem "$Out\sink-received-*.bin").Count
-$expected = $sinkPayload * $connections
+$payloadCopies = $connections
+# The stalled first connection only receives; sending there could block the test sink as well.
+if ($StallFirst -gt 0) { $payloadCopies-- }
+$expected = $sinkPayload * $payloadCopies
 if ([System.Linq.Enumerable]::SequenceEqual([byte[]]$probeReceived, [byte[]]$expected)) {
-    "sink -> headset: probe received the sink payload $connections times ($($probeReceived.Length) bytes): OK"
+    "sink -> headset: probe received the sink payload $payloadCopies times ($($probeReceived.Length) bytes): OK"
 } else {
-    "sink -> headset: probe received $($probeReceived.Length) bytes, expected the sink payload $connections times ($($expected.Length) bytes): FAILED"
+    "sink -> headset: probe received $($probeReceived.Length) bytes, expected the sink payload $payloadCopies times ($($expected.Length) bytes): FAILED"
     $failed++
 }
 & python (Join-Path $tools "app_data_sink.py") check "$Out\headset.bin" $chunk (Get-ChildItem "$Out\sink-received-*.bin" | ForEach-Object { $_.FullName })
