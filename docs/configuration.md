@@ -269,15 +269,28 @@ Offline checks: `./gradlew testDebugUnitTest` exercises the actual Kotlin
 serializers against shared receiver goldens. Build and run
 `c++ -std=c++20 -O2 -ffast-math client/test/depth_format_test.cpp -o /tmp/depth-format-test`
 then `/tmp/depth-format-test client/test/fixtures/camera_stream` for actual C++
-DEPTH byte parity and conversion boundaries. Hardware validation still must check
-both camera permission dialogs, calibration/markers at the PC, depth spatial
-permission, runtime Vulkan validation, pose/timestamp alignment, rate control,
-and repeated stream start/stop without leaked camera/provider resources.
+DEPTH byte parity and conversion boundaries. Remaining hardware gates include
+runtime Vulkan validation, calibrated pose/timestamp alignment, visibility
+pause/resume and repeated start/stop checks for camera/provider resource leaks.
 
 Live native-USB verification on Quest 3 (2026-10-28) received two 320×320 depth
 maps at 10 Hz, with finite stereo poses and increasing capture timestamps.
 Disabling depth stopped frames; re-enabling resumed at 9.93 Hz without
-restarting AR. Camera images and six printed ArUco IDs were also received in
-the earlier combined-setting build. The independent switches and color capture
-require their own hardware verification; these results are not calibrated
-depth accuracy or visual-occlusion measurements.
+restarting AR.
+
+The independent-controls build `ec884f0d` also passed four 15-second AR runs.
+The PC requested all streams in every run; locally disabled streams stayed off.
+
+| Local switches | RGB Hz | Marker reports/s | Depth Hz |
+| --- | ---: | ---: | ---: |
+| Depth only | 0 | 0 | 10.0 |
+| RGB only | 5.0 | 0 | 0 |
+| Markers only | 0 | 15.0 | 0 |
+| All three | 5.0 | 14.8 | 10.0 |
+
+Depth-only passed with both camera permissions denied and no camera calibration.
+RGB-only delivered actual color 1280×960 JPEGs. Marker-only saw all six printed
+IDs 0–5; ID 17 also appeared, so this does not establish detection precision.
+All-three delivered color images, markers and both 320×320 depth views together.
+These short checks do not establish sustained frame quality, calibrated depth
+accuracy or visual occlusion; fast-motion jitter and black flashes remain open.
