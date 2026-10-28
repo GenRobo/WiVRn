@@ -126,3 +126,12 @@ cmake --build build-win --target wivrn-server openxr_wivrn wivrn-handshake-probe
 powershell -ExecutionPolicy Bypass -File tools\windows\encoder-test.ps1 -HelloXr C:\path\to\hello_xr.exe -Encoder nvenc -Seconds 30
 ```
 `-Encoder` is `auto`, `nvenc`, `vulkan`, `x264` or a configuration file; `-Codecs` and `-BitDepth` set what the fake headset advertises. The server listens on port 9757, so no other server may be running. Results are in `build-win\encoder-test-<encoder>`: `probe-<stream>.bin` are the received bitstreams, `server-<stream>.*` the ones the server encoded.
+
+## Testing application data channels without a headset
+
+The [`app-data`](configuration.md#app-data) relay is tested offline with the same fake headset: `tools\windows\app-data-test.ps1` starts a test TCP sink (`tools\windows\app_data_sink.py`, needs Python 3), `wivrn-server` with a channel pointing at it and `wivrn-handshake-probe` replaying a file on the channel while recording what comes back. The sink sends its own payload to the headset, records what the headset sends and restarts once to check the relay's reconnection; the script then compares the files and prints the server's byte counts:
+```bat
+cmake --build build-win --target wivrn-server wivrn-handshake-probe
+powershell -ExecutionPolicy Bypass -File tools\windows\app-data-test.ps1
+```
+Results are in `build-win\app-data-test`. The probe's channel options are environment variables: `PROBE_APP_DATA_CHANNEL`, `PROBE_APP_DATA_SEND=<file>` (replayed in `PROBE_APP_DATA_CHUNK` byte packets, default 65536, at `PROBE_APP_DATA_RATE` packets per second, default 50, repeatedly with `PROBE_APP_DATA_REPEAT=1`) and `PROBE_APP_DATA_RECV=<file>`.
