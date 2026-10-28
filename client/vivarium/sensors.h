@@ -19,6 +19,7 @@
 #pragma once
 
 #include "android/jnipp.h"
+#include "depth_sender.h"
 
 #include <optional>
 #include <vulkan/vulkan_raii.hpp>
@@ -48,6 +49,7 @@ class sensors
 	bool camera_started = false;
 	bool camera_failed = false;
 	bool permission_requested = false;
+	std::optional<depth_sender> depth;
 
 public:
 	sensors(xr::instance &, xr::system &, xr::session &, vk::raii::Device &, uint32_t queue_family_index);

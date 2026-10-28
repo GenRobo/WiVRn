@@ -91,6 +91,7 @@ private class Message(capacity: Int) : ByteArrayOutputStream(capacity) {
 class CameraStream(
     private val context: Context,
     private val send: (ByteArray) -> Boolean,
+    private val onDepthConfig: (enabled: Boolean, rateHz: Int, bootClock: Boolean) -> Unit,
 ) {
     @Volatile private var running = false
     private lateinit var calibration: Calibration
@@ -391,6 +392,7 @@ class CameraStream(
                 send(reply.toByteArray())
                 setLinked(true)
                 config = parsed
+                onDepthConfig(parsed.depth, parsed.depthRateHz, bootClock())
                 Log.i(TAG, "configured: $parsed")
             }
             else -> throw IOException("unexpected message type $type")
@@ -402,8 +404,10 @@ class CameraStream(
         linked = value
         if (value) {
             Log.i(TAG, "PC receiver present")
+            onDepthConfig(config.depth, config.depthRateHz, bootClock())
         } else {
             Log.i(TAG, "PC receiver gone")
+            onDepthConfig(false, 0, false)
         }
         statusWake.offer(Unit)
     }

@@ -37,7 +37,7 @@ class VivariumCamera(private val activity: MainActivity) {
     /** Starts streaming; false when the camera cannot be opened (see the log). */
     fun start(): Boolean {
         if (stream != null) return true
-        val s = CameraStream(activity, { bytes -> activity.sendAppData(StreamFormat.CHANNEL, bytes) })
+        val s = CameraStream(activity, { bytes -> activity.sendAppData(StreamFormat.CHANNEL, bytes) }, ::configureDepth)
         try {
             if (!s.start()) return false
         } catch (error: Exception) {
@@ -54,6 +54,9 @@ class VivariumCamera(private val activity: MainActivity) {
         activity.setAppDataListener(StreamFormat.CHANNEL, null)
         stream?.stop()
         stream = null
+        configureDepth(false, 0, false)
     }
 
+    /** The PC's depth request, applied by the C++ depth sender on the render thread. */
+    private external fun configureDepth(enabled: Boolean, rateHz: Int, bootClock: Boolean)
 }

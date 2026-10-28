@@ -222,3 +222,31 @@ including after delayed permission prompts. CONFIGURE always refreshes calibrati
 without an echo loop. Sensor messages are serialized before transport
 chunking, so concurrent JPEG, markers, status and depth cannot interleave bytes.
 
+Depth is opt-in via CONFIGURE's optional `>BH` depth flag/rate tail. The client
+requests Spatial Data permission only when depth is requested and requires
+`XR_META_environment_depth`; unsupported runtimes keep camera streaming.
+The implementation follows the
+[pinned OpenXR 1.1.58 META specification](https://github.com/KhronosGroup/OpenXR-Docs/blob/release-1.1.58/specification/sources/chapters/extensions/meta/meta_environment_depth.adoc):
+two D16_UNORM array layers are sampled with a compute shader into a host-visible
+storage buffer (no assumed image TRANSFER_SRC usage), retaining the runtime's
+SHADER_READ_ONLY_OPTIMAL layout and queue ownership. GPU reads are queued between
+xrBeginFrame/xrEndFrame; a single in-flight worker converts and sends them without
+waiting in the render loop. Near/far planes unproject normalized depth, including
+META's far-less-than-near infinite projection; unavailable/max-depth samples
+become zero, positive depths round to millimetres and saturate at 65535.
+
+DEPTH type `8` uses `>qqHHBBxx`, then one `>4f7f2f` per view (FOV, STAGE xyz/xyzw,
+near/far), then view-major little-endian uint16 millimetres. Compression is raw
+(`0`); receiver LZ4 support does not require this sender to compress. Extension
+revision 2 supplies capture XrTime; revision 1 falls back to predicted display
+XrTime, not a fabricated capture timestamp. The send timestamp follows the PONG
+clock. Dimensions and complete raw body are bounded to the 8 MiB VCAM limit.
+
+Offline checks: `./gradlew testDebugUnitTest` exercises the actual Kotlin
+serializers against shared receiver goldens. Build and run
+`c++ -std=c++20 -O2 -ffast-math client/test/depth_format_test.cpp -o /tmp/depth-format-test`
+then `/tmp/depth-format-test client/test/fixtures/camera_stream` for actual C++
+DEPTH byte parity and conversion boundaries. Hardware validation still must check
+both camera permission dialogs, calibration/markers at the PC, depth spatial
+permission, runtime Vulkan validation, pose/timestamp alignment, rate control,
+and repeated stream start/stop without leaked camera/provider resources.
