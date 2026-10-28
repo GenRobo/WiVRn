@@ -688,7 +688,7 @@ bool settings_tracking(const settings_context & ctx)
 	list.push_back({
 	        .id = "##rgb_camera_streaming",
 	        .label = _C("setting name", "RGB camera streaming"),
-	        .description = _("Stream passthrough camera images to the PC. Camera and depth streaming are not recommended over Wi-Fi."),
+	        .description = _("Not recommended over WiFi"),
 	        .ui = ui_kind::toggle,
 	        .get_bool = [&config] { return config.rgb_camera_streaming; },
 	        .set_bool = [&config](bool v) {
@@ -704,7 +704,7 @@ bool settings_tracking(const settings_context & ctx)
 	list.push_back({
 	        .id = "##depth_camera_streaming",
 	        .label = _C("setting name", "Depth camera streaming"),
-	        .description = _("Stream depth images to the PC. Camera and depth streaming are not recommended over Wi-Fi."),
+	        .description = _("Not recommended over WiFi"),
 	        .ui = ui_kind::toggle,
 	        .get_bool = [&config] { return config.depth_camera_streaming; },
 	        .set_bool = [&config](bool v) {
