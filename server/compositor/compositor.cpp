@@ -34,6 +34,7 @@
 #include "driver/wivrn_session.h"
 #include "encoder/video_encoder.h"
 #include "inplace_vector.hpp"
+#include <cinttypes>
 #include "utils/method.h"
 #include "utils/wivrn_trace.h"
 
@@ -629,17 +630,24 @@ void compositor::encoder_work(std::stop_token tok)
 
 		wivrn::trace::scope trace_iter(wivrn::trace::cpu_track::compositor, 0, image.frame_index, "encoder_work iter");
 
+		uint8_t current_stream = 0;
 		try
 		{
 			for (auto & encoder: encoders)
 			{
+				current_stream = encoder->stream_idx;
 				if (encoder->stream_idx < 2 or image.view_info.alpha)
 					encoder->encode(session, image.view_info, image.frame_index);
 			}
 		}
 		catch (std::exception & e)
 		{
-			U_LOG_W("encode error: %s", e.what());
+			// Encoder failures don't end the session by themselves: log them clearly but without flooding
+			static std::atomic<uint64_t> encode_errors = 0;
+			auto n = ++encode_errors;
+			if (n <= 5 or (n & (n - 1)) == 0)
+				U_LOG_E("Encoder error on stream %d, frame %" PRIu64 " (error #%" PRIu64 "): %s",
+				        int(current_stream), image.frame_index, n, e.what());
 		}
 		image.busy = false;
 	}

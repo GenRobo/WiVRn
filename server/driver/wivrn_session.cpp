@@ -1085,7 +1085,15 @@ void wivrn_session::run_net(std::stop_token stop)
 		}
 		catch (const std::exception & e)
 		{
-			U_LOG_W("Network exception: %s, Session paused.", e.what());
+			// Say once, clearly, why the headset link ended before trying to reconnect.
+			std::string reason;
+			if (dynamic_cast<const wivrn::socket_shutdown *>(&e))
+				reason = "headset closed the connection";
+			else if (auto se = dynamic_cast<const std::system_error *>(&e))
+				reason = std::format("socket error {} ({})", se->code().value(), se->code().message());
+			else
+				reason = e.what();
+			U_LOG_W("Headset session interrupted: %s [%s]. Session paused, waiting for the headset to reconnect.", reason.c_str(), e.what());
 			pause_session();
 
 			reconnect(stop);
@@ -1325,7 +1333,10 @@ void wivrn_session::reconnect(std::stop_token stop)
 		}
 		catch (std::exception & e)
 		{
-			U_LOG_W("Exception while connecting headset: %s", e.what());
+			U_LOG_W("Exception while connecting headset: %s (retrying in 1 s)", e.what());
+			// Never spin: a persistent failure (e.g. the port can't be bound) must not flood the log.
+			for (int i = 0; i < 10 and not stop.stop_requested(); ++i)
+				std::this_thread::sleep_for(std::chrono::milliseconds(100));
 		}
 	}
 }

@@ -117,6 +117,8 @@ public:
 		return info_packet;
 	}
 
+	static std::string describe_socket_failure(const char * which, socket_t fd, int revents, const std::string & stage);
+
 	template <typename T>
 	int poll(T && visitor, int timeout)
 	{
@@ -138,13 +140,13 @@ public:
 			throw std::system_error(last_socket_error(), std::system_category());
 
 		if (fds[0].revents & (POLLHUP | POLLERR))
-			throw std::runtime_error("Error on stream socket");
+			throw std::runtime_error(describe_socket_failure("stream", fds[0].fd, fds[0].revents, "streaming"));
 
 		if (fds[1].revents & (POLLHUP | POLLERR))
-			throw std::runtime_error("Error on control socket");
+			throw std::runtime_error(describe_socket_failure("control", fds[1].fd, fds[1].revents, "streaming"));
 
 		if (fds[2].revents & (POLLHUP | POLLERR))
-			throw std::runtime_error("Error on IPC socket");
+			throw std::runtime_error(describe_socket_failure("IPC", fds[2].fd, fds[2].revents, "streaming"));
 
 		if (fds[0].revents & POLLIN)
 		{

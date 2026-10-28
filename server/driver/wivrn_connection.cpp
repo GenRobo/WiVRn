@@ -27,7 +27,10 @@
 #include <algorithm>
 #include <chrono>
 #include <cstring>
+#include <format>
 #include <regex>
+
+#include "util/u_logging.h"
 #include <variant>
 
 #ifdef _WIN32
@@ -45,6 +48,23 @@ static void handle_event_from_main_loop(to_monado::stop) {}
 static void handle_event_from_main_loop(to_monado::disconnect) {}
 static void handle_event_from_main_loop(to_monado::set_bitrate) {}
 static void handle_event_from_main_loop(wivrn::to_headset::stream_tab_change) {}
+
+// Describe a POLLHUP/POLLERR on a socket: which revents, and the pending socket error if any.
+std::string wivrn::wivrn_connection::describe_socket_failure(const char * which, wivrn::socket_t fd, int revents, const std::string & stage)
+{
+	int err = 0;
+	socklen_t len = sizeof(err);
+	getsockopt(fd, SOL_SOCKET, SO_ERROR, (char *)&err, &len);
+	std::string what = std::string("Error on ") + which + " socket while " + stage + " (";
+	if (revents & POLLHUP)
+		what += "POLLHUP: peer closed the connection";
+	if (revents & POLLERR)
+		what += std::string(revents & POLLHUP ? ", " : "") + "POLLERR";
+	what += ", revents=" + std::to_string(revents);
+	if (err)
+		what += ", SO_ERROR=" + std::to_string(err) + " " + std::system_category().message(err);
+	return what + ")";
+}
 
 static std::string clean_key(std::string key)
 {
@@ -106,6 +126,13 @@ void wivrn::wivrn_connection::init(std::stop_token stop_token, std::function<voi
 		stream.bind(server_address);
 	}
 
+	std::string stage = "waiting for the headset's crypto handshake";
+	auto set_stage = [&](std::string s) {
+		stage = std::move(s);
+		U_LOG_I("Handshake: %s", stage.c_str());
+	};
+	U_LOG_I("Handshake: %s", stage.c_str());
+
 	auto receive = [&](std::optional<std::chrono::seconds> timeout = std::nullopt, bool allow_stream_socket = false) {
 		// Returns the packet and the port (on the stream socket) or -1 (on the control socket)
 
@@ -137,13 +164,13 @@ void wivrn::wivrn_connection::init(std::stop_token stop_token, std::function<voi
 				throw std::system_error(last_socket_error(), std::system_category());
 
 			if (allow_stream_socket and (fds[0].revents & (POLLHUP | POLLERR)))
-				throw std::runtime_error("Error on stream socket");
+				throw std::runtime_error(describe_socket_failure("stream", fds[0].fd, fds[0].revents, stage));
 
 			if (fds[1].revents & (POLLHUP | POLLERR))
-				throw std::runtime_error("Error on control socket");
+				throw std::runtime_error(describe_socket_failure("control", fds[1].fd, fds[1].revents, stage));
 
 			if (fds[2].revents & (POLLHUP | POLLERR))
-				throw std::runtime_error("Error on IPC socket");
+				throw std::runtime_error(describe_socket_failure("IPC", fds[2].fd, fds[2].revents, stage));
 
 			if (allow_stream_socket and (fds[0].revents & POLLIN))
 			{
@@ -170,7 +197,7 @@ void wivrn::wivrn_connection::init(std::stop_token stop_token, std::function<voi
 
 			if (timeout and std::chrono::steady_clock::now() > timeout_abs)
 			{
-				throw std::runtime_error("No handshake received from client");
+				throw std::runtime_error("No handshake received from client (timeout while " + stage + ")");
 			}
 		}
 	};
@@ -183,8 +210,9 @@ void wivrn::wivrn_connection::init(std::stop_token stop_token, std::function<voi
 		control.send(to_headset::crypto_handshake{
 		        .state = to_headset::crypto_handshake::crypto_state::incompatible_version,
 		});
-		throw std::runtime_error("Incompatible protocol version");
+		throw std::runtime_error(std::format("Incompatible protocol version: headset {:016x}, server {:016x}", crypto_handshake.protocol_version, wivrn::protocol_version));
 	}
+	U_LOG_I("Handshake: headset '%s' protocol %016llx matches", crypto_handshake.name.c_str(), (unsigned long long)crypto_handshake.protocol_version);
 
 	crypto::key headset_key = crypto::key::from_public_key(crypto_handshake.public_key);
 	bool is_public_key_known = std::ranges::any_of(
@@ -231,11 +259,13 @@ void wivrn::wivrn_connection::init(std::stop_token stop_token, std::function<voi
 					// Check the PIN
 					crypto::smp pin_check;
 
+					set_stage("waiting for the PIN to be entered on the headset (pin_check_1, up to 2 min)");
 					auto msg1 = std::get<from_headset::pin_check_1>(receive(2min).first).message;
 
 					auto msg2 = pin_check.step2(msg1, pin);
 					control.send(to_headset::pin_check_2{msg2});
 
+					set_stage("waiting for pin_check_3");
 					auto msg3 = std::get<from_headset::pin_check_3>(receive(10s).first).message;
 
 					auto [msg4, pin_match] = pin_check.step4(msg3);
@@ -257,11 +287,13 @@ void wivrn::wivrn_connection::init(std::stop_token stop_token, std::function<voi
 	}
 
 	// Wait for confirmation that the client has set up encryption
+	set_stage("waiting for the headset's encrypted crypto handshake confirmation");
 	if (not std::holds_alternative<from_headset::crypto_handshake>(receive().first))
 		throw std::runtime_error("No handshake received from client");
 
 	control.send(to_headset::handshake{.stream_port = port});
 
+	set_stage("waiting for the headset's stream/TCP handshake");
 	auto [stream_handshake, client_port] = receive(10s, true);
 
 	// Check the packet type
@@ -284,7 +316,9 @@ void wivrn::wivrn_connection::init(std::stop_token stop_token, std::function<voi
 
 	control.send(to_headset::handshake{.stream_port = port});
 
+	set_stage(client_port >= 0 ? "waiting for headset info (UDP stream)" : "waiting for headset info (TCP only)");
 	info_packet = std::get<from_headset::headset_info_packet>(receive(10s).first);
+	U_LOG_I("Handshake: complete");
 
 	active = true;
 
