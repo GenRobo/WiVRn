@@ -40,11 +40,14 @@
 #include <boost/locale/gnu_gettext.hpp>
 #include <chrono>
 #include <filesystem>
+#include <functional>
 #include <glm/glm.hpp>
 #include <glm/gtc/quaternion.hpp>
 #include <mutex>
 #include <optional>
+#include <span>
 #include <spdlog/spdlog.h>
+#include <string_view>
 #include <unordered_map>
 #include <unordered_set>
 #include <vulkan/vulkan_raii.hpp>
@@ -52,6 +55,7 @@
 #include <openxr/openxr_platform.h>
 #include <openxr/openxr_reflection.h>
 
+class wivrn_session;
 class scene;
 
 #ifdef __ANDROID__
@@ -161,6 +165,12 @@ private:
 	boost::locale::generator gen;
 	boost::locale::gnu_gettext::messages_info messages_info;
 	hmd_traits runtime_hmd_traits;
+
+	// Application data channels (from_headset::app_data / to_headset::app_data)
+	std::mutex app_data_session_mutex;
+	wivrn_session * app_data_session = nullptr; // set by scenes::stream while a stream session is active
+	std::mutex app_data_handlers_mutex;
+	std::unordered_map<std::string, std::shared_ptr<const std::function<void(std::span<const uint8_t>)>>> app_data_handlers;
 
 private:
 	void loop();
@@ -449,6 +459,18 @@ public:
 	{
 		return instance().messages_info;
 	}
+
+	// Application data channels: byte streams relayed by the server to TCP sinks (docs/configuration.md, "app-data").
+	// Sends data on a channel, split into packets of app_data_max_size; the chunks of one call are sent
+	// contiguously. Returns false, dropping the data, when no stream session is active or the send failed.
+	static bool send_app_data(std::string_view channel, std::span<const uint8_t> data);
+	// Receives the data the server relays on a channel, called on the stream's network thread.
+	// An empty handler removes it; on Android, channels without a handler go to MainActivity.onAppData.
+	static void set_app_data_handler(std::string channel, std::function<void(std::span<const uint8_t>)> handler);
+	// Used by scenes::stream
+	static void set_app_data_session(wivrn_session * session);
+	static void clear_app_data_session(wivrn_session * session);
+	static void dispatch_app_data(wivrn::to_headset::app_data && packet);
 
 	void load_locale();
 };
