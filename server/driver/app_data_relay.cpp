@@ -141,9 +141,18 @@ void app_data_relay::pause()
 void app_data_relay::from_headset(std::vector<uint8_t> && data)
 {
 	std::lock_guard lock(mutex);
-	if (not connected or queued_bytes + data.size() > max_queued_bytes)
+	if (not connected)
 	{
 		bytes_dropped += data.size();
+		return;
+	}
+	if (queued_bytes + data.size() > max_queued_bytes)
+	{
+		// A missing chunk corrupts application framing: end this stream, never resume it.
+		bytes_dropped += data.size();
+		connected = false;
+		overflowed = true;
+		::send(wake_sender.get_fd(), "", 1, 0);
 		return;
 	}
 	queued_bytes += data.size();
@@ -195,6 +204,7 @@ void app_data_relay::run(std::stop_token stop)
 		{
 			connect_failed = false;
 			U_LOG_I("app-data %s: connected to %s:%s", sink.channel.c_str(), sink.host.c_str(), sink.port.c_str());
+			overflowed = false;
 			connected = true;
 			std::string reason;
 			try
@@ -206,6 +216,9 @@ void app_data_relay::run(std::stop_token stop)
 			{
 				reason = e.what();
 			}
+			if (overflowed)
+				reason = "queue overflow; resetting byte stream";
+			tcp = TCP{};
 			drop_queue();
 			U_LOG_I("app-data %s: disconnected from %s:%s (%s)", sink.channel.c_str(), sink.host.c_str(), sink.port.c_str(), reason.c_str());
 			log_counters();
@@ -387,6 +400,11 @@ bool app_data_relay::flush_queue(std::stop_token stop, TCP & tcp)
 			{
 				bytes_dropped += remaining;
 				return true;
+			}
+			if (overflowed)
+			{
+				bytes_dropped += remaining;
+				return false;
 			}
 			auto n = ::send(tcp.get_fd(), (const char *)data.data() + offset, (int)(data.size() - offset), send_flags);
 			if (n < 0)
