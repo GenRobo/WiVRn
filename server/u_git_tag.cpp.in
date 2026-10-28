@@ -21,7 +21,7 @@ uint16_t version(int digit)
 
 	uint16_t val = 0;
 	// We don't care if parsing fail, return 0
-	std::from_chars(tag.begin(), tag.end(), val);
+	std::from_chars(tag.data(), tag.data() + tag.size(), val);
 	return val;
 }
 } // namespace

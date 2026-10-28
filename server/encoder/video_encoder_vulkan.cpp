@@ -39,7 +39,7 @@ public:
 		vk::raii::ImageView image_view;
 		vk::VideoPictureResourceInfoKHR resource;
 		vk::VideoReferenceSlotInfoKHR & info;
-		uint64_t frame_index = -1;
+		uint64_t frame_index = uint64_t(-1);
 		bool acked = false;
 	};
 

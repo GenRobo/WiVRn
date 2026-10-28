@@ -154,7 +154,7 @@ std::array<wivrn::compositor::image, 2> make_images(wivrn::vk_bundle & vk, vk::C
 		        VmaAllocationCreateInfo{.usage = VMA_MEMORY_USAGE_AUTO},
 		        std::format("compositor YCbCr image {}", i),
 		};
-		vk::Image vk_image{image};
+		vk::Image vk_image = image;
 		return wivrn::compositor::image{
 		        .image{std::move(image)},
 		        .view_y{
@@ -696,7 +696,7 @@ compositor::compositor(wivrn_session & session) :
         squasher(vk, render_extent(session.get_info())),
         foveation(vk, images[0].image.info().extent)
 {
-	comp_base * c_base = this;
+	struct comp_base * c_base = this;
 	// Ensure we can safely cast pointers
 	assert(intptr_t(&base) == intptr_t(this));
 	auto res = vk_init_from_given(
@@ -766,7 +766,7 @@ compositor::~compositor()
 	encoder_thread.request_stop();
 	encode_request = -2;
 	encode_request.notify_all();
-	comp_base * c_base = this;
+	struct comp_base * c_base = this;
 	comp_swapchain_shared_garbage_collect(&cscs);
 	comp_swapchain_shared_destroy(&cscs, &c_base->vk);
 	comp_base_fini(this);

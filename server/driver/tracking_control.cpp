@@ -105,8 +105,8 @@ void wivrn::tracking_control::resolve(XrDuration frame_time, XrDuration latency)
 				break;
 		}
 
-		req.min_prediction = std::clamp(req.min_prediction + latency, 0l, max_extrapolation_ns);
-		req.max_prediction = std::clamp(req.max_prediction + latency, 0l, max_extrapolation_ns);
+		req.min_prediction = std::clamp<int64_t>(req.min_prediction + latency, 0, max_extrapolation_ns);
+		req.max_prediction = std::clamp<int64_t>(req.max_prediction + latency, 0, max_extrapolation_ns);
 
 		for (int64_t t = req.min_prediction; t < req.max_prediction + step; t += step)
 		{
