@@ -135,3 +135,5 @@ cmake --build build-win --target wivrn-server wivrn-handshake-probe
 powershell -ExecutionPolicy Bypass -File tools\windows\app-data-test.ps1
 ```
 Results are in `build-win\app-data-test`. The probe's channel options are environment variables: `PROBE_APP_DATA_CHANNEL`, `PROBE_APP_DATA_SEND=<file>` (replayed in `PROBE_APP_DATA_CHUNK` byte packets, default 65536, at `PROBE_APP_DATA_RATE` packets per second, default 50, repeatedly with `PROBE_APP_DATA_REPEAT=1`) and `PROBE_APP_DATA_RECV=<file>`.
+
+To exercise a connected but stalled receiver, run `powershell -ExecutionPolicy Bypass -File tools\windows\app-data-test.ps1 -StallFirst 15 -Seconds 35`. This stops reads on the first sink connection until the bounded relay queue overflows. The test requires an explicit queue-overflow stream reset, reconnection, and contiguous received bytes on each connection; dropping a chunk and continuing the same stream fails the byte checks.

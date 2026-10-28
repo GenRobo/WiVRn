@@ -5,6 +5,8 @@
 #       byte writes at <rate> writes per second and records what it receives in <out-prefix>-<n>.bin.
 #       With --restart-after, the first connection and the listener are closed after S seconds and the
 #       sink listens again 3 s later, to test the relay's reconnection.
+#       With --stall-first S, the first connection sends its payload but does not read for S seconds;
+#       the relay must end that stream on queue overflow and reconnect without splicing byte gaps.
 #   app_data_sink.py check <sent> <chunk> <received>...
 #       Checks that each <received> file is a contiguous, <chunk> aligned slice of <sent> repeated,
 #       i.e. what a sink sees of a probe replaying <sent> with PROBE_APP_DATA_REPEAT=1.
@@ -18,12 +20,15 @@ def serve(args):
     payload = open(args[1], "rb").read()
     prefix = args[2]
     restart_after = None
+    stall_first = 0
     chunk = 65536
     rate = 100
     i = 3
     while i < len(args):
         if args[i] == "--restart-after":
             restart_after = float(args[i + 1])
+        elif args[i] == "--stall-first":
+            stall_first = float(args[i + 1])
         elif args[i] == "--chunk":
             chunk = int(args[i + 1])
         elif args[i] == "--rate":
@@ -60,6 +65,9 @@ def serve(args):
                 sent += len(piece)
                 if sent == len(payload):
                     print(f"sink: payload sent, {sent} bytes", flush=True)
+            if connection == 1 and now - started < stall_first:
+                time.sleep(0.001)
+                continue
             try:
                 data = client.recv(1 << 20)
             except BlockingIOError:
@@ -79,6 +87,8 @@ def serve(args):
         print(f"sink: connection {connection} done, sent {sent} received {received}", flush=True)
         if restart_after is not None and connection == 1:
             time.sleep(3)
+            continue
+        if stall_first and connection == 1:
             continue
         return 0
 

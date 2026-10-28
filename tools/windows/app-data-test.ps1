@@ -11,6 +11,7 @@ param(
     [int]$Seconds = 25,
     [int]$RestartAfter = 8,
     [int]$Port = 9760,
+    [int]$StallFirst = 0,
     [string]$BuildDir = "",
     [string]$Out = ""
 )
@@ -38,7 +39,9 @@ foreach ($f in @(@("headset.bin", (48 * $chunk)), @("sink.bin", (32 * $chunk))))
 $config = Join-Path $Out "config.json"
 "{ `"encoder`": `"x264`", `"hid-forwarding`": false, `"app-data`": [ { `"channel`": `"test`", `"connect`": `"127.0.0.1:$Port`" } ] }" | Set-Content -Encoding ascii $config
 
-$sink = Start-Process -FilePath "python" -ArgumentList @((Join-Path $tools "app_data_sink.py"), "serve", "$Port", "$Out\sink.bin", "$Out\sink-received", "--restart-after", "$RestartAfter") `
+$sinkMode = @("--restart-after", "$RestartAfter")
+if ($StallFirst -gt 0) { $sinkMode = @("--stall-first", "$StallFirst") }
+$sink = Start-Process -FilePath "python" -ArgumentList (@((Join-Path $tools "app_data_sink.py"), "serve", "$Port", "$Out\sink.bin", "$Out\sink-received") + $sinkMode) `
     -RedirectStandardOutput "$Out\sink.log" -RedirectStandardError "$Out\sink.err" -PassThru -NoNewWindow
 Start-Sleep 1
 
@@ -92,4 +95,9 @@ if ([System.Linq.Enumerable]::SequenceEqual([byte[]]$probeReceived, [byte[]]$exp
 & python (Join-Path $tools "app_data_sink.py") check "$Out\headset.bin" $chunk (Get-ChildItem "$Out\sink-received-*.bin" | ForEach-Object { $_.FullName })
 if ($LASTEXITCODE -ne 0) { $failed++ }
 if ($connections -lt 2) { "reconnection: only $connections sink connection(s): FAILED"; $failed++ } else { "reconnection: $connections sink connections: OK" }
+if ($StallFirst -gt 0) {
+    if (Select-String -Path "$Out\server-stderr.log" -Pattern "queue overflow; resetting byte stream") {
+        "queue overflow: local byte stream reset: OK"
+    } else { "queue overflow: no stream reset observed: FAILED"; $failed++ }
+}
 if ($failed -eq 0) { "app-data test passed: $Out" } else { "app-data test FAILED ($failed): $Out"; exit 1 }
