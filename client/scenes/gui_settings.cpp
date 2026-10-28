@@ -670,18 +670,48 @@ bool settings_tracking(const settings_context & ctx)
 
 #ifdef __ANDROID__
 	list.push_back({
-	        .id = "##vivarium_camera",
-	        .label = _C("setting name", "Vivarium camera"),
-	        .description = _("Stream the passthrough camera, detected markers and depth to the PC's Vivarium receiver."),
+	        .id = "##marker_tracking",
+	        .label = _C("setting name", "Marker tracking"),
+	        .description = _("Detect markers with the passthrough camera and stream their corner coordinates to the PC."),
 	        .ui = ui_kind::toggle,
-	        .get_bool = [&config] { return config.vivarium_camera; },
+	        .get_bool = [&config] { return config.marker_tracking; },
 	        .set_bool = [&config](bool v) {
-		        config.vivarium_camera = v;
+		        config.marker_tracking = v;
 		        config.save();
 		        if (v)
 			        vivarium::request_permissions();
 	        },
-	        .default_bool = default_config.vivarium_camera,
+	        .default_bool = default_config.marker_tracking,
+	        .enabled = [&ctx] { return not ctx.in_game; },
+	        .disabled_tooltip = disconnect_tip,
+	});
+	list.push_back({
+	        .id = "##rgb_camera_streaming",
+	        .label = _C("setting name", "RGB camera streaming"),
+	        .description = _("Stream passthrough camera images to the PC. Camera and depth streaming are not recommended over Wi-Fi."),
+	        .ui = ui_kind::toggle,
+	        .get_bool = [&config] { return config.rgb_camera_streaming; },
+	        .set_bool = [&config](bool v) {
+		        config.rgb_camera_streaming = v;
+		        config.save();
+		        if (v)
+			        vivarium::request_permissions();
+	        },
+	        .default_bool = default_config.rgb_camera_streaming,
+	        .enabled = [&ctx] { return not ctx.in_game; },
+	        .disabled_tooltip = disconnect_tip,
+	});
+	list.push_back({
+	        .id = "##depth_camera_streaming",
+	        .label = _C("setting name", "Depth camera streaming"),
+	        .description = _("Stream depth images to the PC. Camera and depth streaming are not recommended over Wi-Fi."),
+	        .ui = ui_kind::toggle,
+	        .get_bool = [&config] { return config.depth_camera_streaming; },
+	        .set_bool = [&config](bool v) {
+		        config.depth_camera_streaming = v;
+		        config.save();
+	        },
+	        .default_bool = default_config.depth_camera_streaming,
 	        .enabled = [&ctx] { return not ctx.in_game; },
 	        .disabled_tooltip = disconnect_tip,
 	});

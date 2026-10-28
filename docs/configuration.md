@@ -203,35 +203,55 @@ Default value: unset
 
 If set, overrides the name displayed in the server list.
 
-## Vivarium headset sensors (Android fork)
+## Headset sensor streaming (Android fork)
 
-The headset's **Tracking → Vivarium camera** setting is off by default and saved
-in the client configuration. Enable it in the lobby and grant Camera and Headset
-Camera access. Capture runs only in a visible WiVRn streaming session; ending
-the session or hiding the app closes the camera and releases the depth provider.
+The headset's **Tracking** page has three independent switches, all off by
+default and saved in the client configuration:
+
+- **Marker tracking** (`marker_tracking`): detect ArUco markers and send their
+  corner coordinates without requiring image streaming.
+- **RGB camera streaming** (`rgb_camera_streaming`): send color JPEG images
+  without requiring marker detection.
+- **Depth camera streaming** (`depth_camera_streaming`): send environment depth
+  without opening Camera2 capture.
+
+Enable only the required switches in the lobby. A PC request cannot override a
+local off switch. Marker tracking and RGB capture need Camera and Headset Camera
+access; depth needs Spatial Data access. Replacing the former combined setting
+leaves the new switches off until explicitly enabled.
+
+**Camera and depth streaming are not recommended over Wi-Fi.** Prefer native
+USB networking or Ethernet for simultaneous rendered video and sensor streams.
+Capture runs only in a visible WiVRn streaming session; ending the session or
+hiding the app closes the camera and releases the depth provider.
 The PC receiver uses the `vivarium-camera` application data channel, for example
 `"app-data": [{"channel": "vivarium-camera", "connect": "127.0.0.1:9760"}]`.
 No camera app, separate camera TCP connection, or ADB reverse is needed.
 
-The left passthrough camera produces grayscale JPEG frames and on-headset OpenCV
-4.14 ArUco detections in VCAM version 1. CONFIGURE controls image and detection
-rates; PING/PONG uses the camera timestamp source's headset clock. LINK_STATUS
-reports route `2` (WiVRn) with Android's active-network transport. A receiver
+The left passthrough camera produces color JPEG frames and on-headset OpenCV
+4.14 ArUco detections in VCAM version 1. Detection still uses luma; JPEG encoding
+includes the YUV source's chroma. CONFIGURE controls image and detection rates
+within the locally enabled streams; PING/PONG uses the metadata's headset clock.
+LINK_STATUS reports route `2` (WiVRn) with Android's active-network transport. A receiver
 should resend its current CONFIGURE on its first CALIBRATION per TCP connection,
 including after delayed permission prompts. CONFIGURE always refreshes calibration,
 without an echo loop. Sensor messages are serialized before transport
 chunking, so concurrent JPEG, markers, status and depth cannot interleave bytes.
 
-Depth is opt-in via CONFIGURE's optional `>BH` depth flag/rate tail. The client
-requests Spatial Data permission only when depth is requested and requires
-`XR_META_environment_depth`; unsupported runtimes keep camera streaming.
+Depth is opt-in through both the local switch and CONFIGURE's optional `>BH`
+depth flag/rate tail. The client requests Spatial Data permission only when
+depth is requested and requires `XR_META_environment_depth`; unsupported
+runtimes keep independently enabled camera and marker streams.
 The implementation follows the
 [pinned OpenXR 1.1.58 META specification](https://github.com/KhronosGroup/OpenXR-Docs/blob/release-1.1.58/specification/sources/chapters/extensions/meta/meta_environment_depth.adoc):
 two D16_UNORM array layers are sampled with a compute shader into a host-visible
 storage buffer (no assumed image TRANSFER_SRC usage), retaining the runtime's
 SHADER_READ_ONLY_OPTIMAL layout and queue ownership. GPU reads are queued between
-xrBeginFrame/xrEndFrame; a single in-flight worker converts and sends them without
-waiting in the render loop. Near/far planes unproject normalized depth, including
+xrBeginFrame/xrEndFrame. A newly created provider first acquires on the next
+frame, so it observes xrBeginFrame before acquisition; immediate acquisition
+in the creation frame returned XR_ERROR_CALL_ORDER_INVALID on Quest 3.
+A single in-flight worker converts and sends images without waiting in the
+render loop. Near/far planes unproject normalized depth, including
 META's far-less-than-near infinite projection; unavailable/max-depth samples
 become zero, positive depths round to millimetres and saturate at 65535.
 
@@ -250,3 +270,11 @@ DEPTH byte parity and conversion boundaries. Hardware validation still must chec
 both camera permission dialogs, calibration/markers at the PC, depth spatial
 permission, runtime Vulkan validation, pose/timestamp alignment, rate control,
 and repeated stream start/stop without leaked camera/provider resources.
+
+Live native-USB verification on Quest 3 (2026-10-28) received two 320×320 depth
+maps at 10 Hz, with finite stereo poses and increasing capture timestamps.
+Disabling depth stopped frames; re-enabling resumed at 9.93 Hz without
+restarting AR. Camera images and six printed ArUco IDs were also received in
+the earlier combined-setting build. The independent switches and color capture
+require their own hardware verification; these results are not calibrated
+depth accuracy or visual-occlusion measurements.

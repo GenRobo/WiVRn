@@ -48,7 +48,7 @@ import java.util.concurrent.TimeUnit
 import kotlin.concurrent.thread
 import org.opencv.android.OpenCVLoader
 
-private const val TAG = "VivariumCamera"
+private const val TAG = "SensorStreaming"
 private const val WIDTH = 1280
 private const val HEIGHT = 960
 private const val FPS = 60
@@ -77,8 +77,8 @@ private class Message(capacity: Int) : ByteArrayOutputStream(capacity) {
 }
 
 /**
- * Streams the left passthrough camera and the markers detected in it to the PC over the
- * `vivarium-camera` application data channel of the WiVRn session.
+ * Streams locally enabled passthrough camera images, markers and native depth to the PC
+ * over the `vivarium-camera` application data channel of the WiVRn session.
  *
  * The PC receiver on the other end of the channel expects CALIBRATION before anything
  * else and sends CONFIGURE as soon as it connects, then PING every 50 ms. The headset
@@ -92,18 +92,21 @@ class CameraStream(
     private val context: Context,
     private val send: (ByteArray) -> Boolean,
     private val onDepthConfig: (enabled: Boolean, rateHz: Int, bootClock: Boolean) -> Unit,
+    private val markerTracking: Boolean,
+    private val rgbCameraStreaming: Boolean,
+    private val depthCameraStreaming: Boolean,
 ) {
     @Volatile private var running = false
     private lateinit var calibration: Calibration
-    private val cameraThread by lazy { HandlerThread("vivarium-camera").apply { start() } }
-    private val handler by lazy { Handler(cameraThread.looper) }
+    private val captureImages = markerTracking || rgbCameraStreaming
+    private var cameraThread: HandlerThread? = null
+    private lateinit var handler: Handler
     private var camera: CameraDevice? = null
     private var reader: ImageReader? = null
-    // NV21 buffers whose chroma stays neutral (128): only luma is copied, so the JPEG is grayscale.
-    private val freeBuffers = ArrayBlockingQueue<ByteArray>(4)
-    private val encodeQueue = ArrayBlockingQueue<Pair<FrameInfo, ByteArray>>(2)
-    private val pendingImages = HashMap<Long, ByteArray>()
-    private val pendingResults = HashMap<Long, TotalCaptureResult>()
+    private val freeBuffers by lazy { ArrayBlockingQueue<ByteArray>(4) }
+    private val encodeQueue by lazy { ArrayBlockingQueue<Pair<FrameInfo, ByteArray>>(2) }
+    private val pendingImages by lazy { HashMap<Long, ByteArray>() }
+    private val pendingResults by lazy { HashMap<Long, TotalCaptureResult>() }
     companion object {
         // Capture can pause while the relay TCP session stays connected. Keep the
         // PC's last request across capture instances; only CONFIGURE replaces it.
@@ -111,11 +114,11 @@ class CameraStream(
     }
     @Volatile private var linked = false
     @Volatile private var lastPcMessageMs = 0L
-    private val rateCap = FrameRateCap()
+    private val rateCap by lazy { FrameRateCap() }
     // Detection: the camera thread copies luma into `latest.back()` and publishes it once
     // the frame's capture result is known; the detector thread takes the newest frame.
-    private val latest = LatestFrame(WIDTH, HEIGHT)
-    private val detectCap = FrameRateCap()
+    private val latest by lazy { LatestFrame(WIDTH, HEIGHT) }
+    private val detectCap by lazy { FrameRateCap() }
     private var detectorReady = false
     private var awaitingDetectionNs = -1L
     // Incoming bytes arrive on the WiVRn network thread; one reader and one reply buffer for it.
@@ -123,15 +126,15 @@ class CameraStream(
     private val reply = Message(64)
     // Link status: sent every STATUS_PERIOD_MS, and at once on link or a network change.
     private val statusWake = ArrayBlockingQueue<Unit>(1)
-    private lateinit var network: NetworkStatus
+    private var network: NetworkStatus? = null
     private var encoder: Thread? = null
     private var detector: Thread? = null
     private var status: Thread? = null
 
-    /** Opens the left passthrough camera; false when access is missing or there is no such camera. */
+    /** Reads real camera metadata for the handshake; opens capture only for images or markers. */
     fun start(): Boolean {
         if (running) return true
-        if (!hasCameraPermissions(context)) {
+        if (captureImages && !hasCameraPermissions(context)) {
             Log.w(TAG, "camera access not granted")
             return false
         }
@@ -144,43 +147,57 @@ class CameraStream(
             Log.e(TAG, "no left passthrough camera; is passthrough enabled on Horizon OS v74+?")
             return false
         }
+        // CameraManager permits metadata queries without CAMERA. Android may redact
+        // lens calibration fields; calibrationOf preserves those as unknown (NaN).
         val characteristics = manager.getCameraCharacteristics(id)
         calibration = calibrationOf(id, characteristics)
-        repeat(4) { freeBuffers.add(ByteArray(WIDTH * HEIGHT * 3 / 2).apply { fill(128.toByte(), WIDTH * HEIGHT) }) }
-        running = true
-        encoder = thread(name = "vivarium-encoder") { encodeLoop() }
-        detectorReady = OpenCVLoader.initLocal()
-        if (detectorReady) {
-            detector = thread(name = "vivarium-detector") { MarkerDetector(latest, ::sendMarkers).run { running } }
-        } else {
-            Log.e(TAG, "OpenCV failed to load; marker detection is off")
-        }
         network = NetworkStatus(context) { statusWake.offer(Unit) }.also { it.start() }
-        status = thread(name = "vivarium-status") { statusLoop() }
-        openCamera(manager, id, characteristics)
+        running = true
+        if (rgbCameraStreaming) {
+            repeat(4) { freeBuffers.add(ByteArray(WIDTH * HEIGHT * 3 / 2)) }
+            encoder = thread(name = "sensor-encoder") { encodeLoop() }
+        }
+        if (markerTracking) {
+            detectorReady = OpenCVLoader.initLocal()
+            if (detectorReady) {
+                detector = thread(name = "marker-detector") { MarkerDetector(latest, ::sendMarkers).run { running } }
+            } else {
+                Log.e(TAG, "OpenCV failed to load; marker detection is off")
+            }
+        }
+        status = thread(name = "sensor-status") { statusLoop() }
+        if (captureImages) {
+            val captureThread = HandlerThread("sensor-camera").apply { start() }
+            cameraThread = captureThread
+            handler = Handler(captureThread.looper)
+            openCamera(manager, id, characteristics)
+        }
         return true
     }
 
     fun stop() {
         if (!running) return
         running = false
-        handler.post {
-            camera?.close()
-            reader?.close()
-            cameraThread.quitSafely()
+        cameraThread?.let { captureThread ->
+            handler.post {
+                camera?.close()
+                reader?.close()
+                captureThread.quitSafely()
+            }
         }
-        network.stop()
+        network?.stop()
+        network = null
         statusWake.offer(Unit)
         setLinked(false)
         encoder?.join()
         detector?.join()
         status?.join()
-        cameraThread.join()
+        cameraThread?.join()
     }
 
     private fun calibrationOf(id: String, ch: CameraCharacteristics): Calibration {
         fun floats(values: FloatArray?, count: Int) = FloatArray(count) { values?.getOrNull(it) ?: Float.NaN }
-        val array = ch.get(CameraCharacteristics.SENSOR_INFO_PRE_CORRECTION_ACTIVE_ARRAY_SIZE) ?: Rect(0, 0, WIDTH, HEIGHT)
+        val array = ch.get(CameraCharacteristics.SENSOR_INFO_PRE_CORRECTION_ACTIVE_ARRAY_SIZE)
         return Calibration(
             width = WIDTH,
             height = HEIGHT,
@@ -189,7 +206,7 @@ class CameraStream(
             timestampSource = ch.get(CameraCharacteristics.SENSOR_INFO_TIMESTAMP_SOURCE) ?: 0,
             lensPoseReference = ch.get(CameraCharacteristics.LENS_POSE_REFERENCE) ?: 255,
             codec = StreamFormat.CODEC_JPEG,
-            activeArray = intArrayOf(array.left, array.top, array.width(), array.height()),
+            activeArray = array?.let { intArrayOf(it.left, it.top, it.width(), it.height()) } ?: IntArray(4) { -1 },
             intrinsics = floats(ch.get(CameraCharacteristics.LENS_INTRINSIC_CALIBRATION), 5),
             distortion = floats(ch.get(CameraCharacteristics.LENS_DISTORTION), 5),
             poseTranslation = floats(ch.get(CameraCharacteristics.LENS_POSE_TRANSLATION), 3),
@@ -258,8 +275,10 @@ class CameraStream(
             pendingResults[timestamp] = result
             if (timestamp == awaitingDetectionNs) publishDetection(result)
             pendingResults.keys.removeAll { it < timestamp - STALE_NS }
-            pendingImages.entries.removeAll { (key, stale) -> (key < timestamp - STALE_NS).also { if (it) freeBuffers.offer(stale) } }
-            pair(timestamp)
+            if (rgbCameraStreaming) {
+                pendingImages.entries.removeAll { (key, stale) -> (key < timestamp - STALE_NS).also { if (it) freeBuffers.offer(stale) } }
+                pair(timestamp)
+            }
         }
     }
 
@@ -269,7 +288,7 @@ class CameraStream(
             if (!linked) return
             val current = config
             val dictionary = current.detectDictionary
-            if (detectorReady && dictionary != null && detectCap.accept(it.timestamp, current.detectRateHz)) {
+            if (markerTracking && detectorReady && dictionary != null && detectCap.accept(it.timestamp, current.detectRateHz)) {
                 val plane = it.planes[0]
                 latest.back().apply {
                     copyLuma(plane.buffer, plane.rowStride)
@@ -280,18 +299,20 @@ class CameraStream(
                 pendingResults[it.timestamp]?.let { result -> publishDetection(result) }
             }
             // Drop frames over the PC's rate cap before copying and encoding them.
-            if (!current.images || !rateCap.accept(it.timestamp, current.maxRateHz)) return
+            if (!rgbCameraStreaming || !current.images || !rateCap.accept(it.timestamp, current.maxRateHz)) return
             val buffer = freeBuffers.poll()
             if (buffer == null) {
                 Log.w(TAG, "encoder behind; frame dropped")
                 return
             }
-            val plane = it.planes[0]
-            val luma = plane.buffer
-            for (row in 0 until HEIGHT) {
-                luma.position(row * plane.rowStride)
-                luma.get(buffer, row * WIDTH, WIDTH)
-            }
+            val planes = it.planes
+            copyYuv420ToNv21(
+                WIDTH, HEIGHT,
+                planes[0].buffer, planes[0].rowStride, planes[0].pixelStride,
+                planes[1].buffer, planes[1].rowStride, planes[1].pixelStride,
+                planes[2].buffer, planes[2].rowStride, planes[2].pixelStride,
+                buffer,
+            )
             pendingImages[it.timestamp] = buffer
             pair(it.timestamp)
         }
@@ -323,11 +344,11 @@ class CameraStream(
         latest.publish()
     }
 
-    private val markersMessage = Message(4096)
+    private val markersMessage by lazy { Message(4096) }
 
     /** Detector thread: sends one frame's markers; dropped while the PC is not there. */
     private fun sendMarkers(report: MarkerReport) {
-        if (!linked) return
+        if (!running || !linked || !markerTracking || config.detectDictionary != report.dictionary) return
         markersMessage.reset()
         StreamFormat.writeMarkers(markersMessage.out, report)
         send(markersMessage.toByteArray())
@@ -345,7 +366,7 @@ class CameraStream(
             } finally {
                 freeBuffers.offer(nv21)
             }
-            if (!linked) continue
+            if (!running || !linked || !rgbCameraStreaming || !config.images) continue
             frame.reset()
             StreamFormat.writeFrame(frame.out, info.copy(sendTimeNs = clockNs()), jpeg.bytes(), jpeg.size())
             send(frame.toByteArray())
@@ -390,9 +411,12 @@ class CameraStream(
                 reply.reset()
                 StreamFormat.writeCalibration(reply.out, calibration)
                 send(reply.toByteArray())
-                setLinked(true)
                 config = parsed
-                onDepthConfig(parsed.depth, parsed.depthRateHz, bootClock())
+                if (linked) {
+                    onDepthConfig(depthCameraStreaming && parsed.depth, parsed.depthRateHz, bootClock())
+                } else {
+                    setLinked(true)
+                }
                 Log.i(TAG, "configured: $parsed")
             }
             else -> throw IOException("unexpected message type $type")
@@ -404,7 +428,7 @@ class CameraStream(
         linked = value
         if (value) {
             Log.i(TAG, "PC receiver present")
-            onDepthConfig(config.depth, config.depthRateHz, bootClock())
+            onDepthConfig(depthCameraStreaming && config.depth, config.depthRateHz, bootClock())
         } else {
             Log.i(TAG, "PC receiver gone")
             onDepthConfig(false, 0, false)
@@ -427,7 +451,7 @@ class CameraStream(
             }
             if (now < nextStatusMs && !woken) continue
             nextStatusMs = now + STATUS_PERIOD_MS
-            val status = network.read(clockNs())
+            val status = network?.read(clockNs()) ?: continue
             if (status.key() != lastKey) {
                 lastKey = status.key()
                 Log.i(TAG, "link: $status")

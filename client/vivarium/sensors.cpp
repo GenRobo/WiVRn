@@ -69,9 +69,15 @@ void vivarium::request_permissions()
 	request_from(0);
 }
 
-vivarium::sensors::sensors(xr::instance & instance, xr::system & system, xr::session & session, vk::raii::Device & device, uint32_t queue_family_index) :
-        camera(make_camera())
+vivarium::sensors::sensors(xr::instance & instance, xr::system & system, xr::session & session, vk::raii::Device & device, uint32_t queue_family_index,
+                           bool marker_tracking, bool rgb_camera_streaming, bool depth_camera_streaming) :
+        camera(make_camera()),
+        marker_tracking(marker_tracking),
+        rgb_camera_streaming(rgb_camera_streaming),
+        depth_camera_streaming(depth_camera_streaming)
 {
+	if (not depth_camera_streaming)
+		return;
 	if (instance.has_extension(XR_META_ENVIRONMENT_DEPTH_EXTENSION_NAME))
 	{
 		try
@@ -95,7 +101,7 @@ vivarium::sensors::~sensors()
 	}
 	catch (std::exception & e)
 	{
-		spdlog::error("Vivarium camera: stop failed: {}", e.what());
+		spdlog::error("Sensor streaming: stop failed: {}", e.what());
 	}
 	depth.reset();
 }
@@ -104,14 +110,14 @@ void vivarium::sensors::frame(XrTime display_time)
 {
 	if (not camera_started and not camera_failed)
 	{
-		if (camera.call<jni::Bool>("hasPermissions"))
+		if (not (marker_tracking or rgb_camera_streaming) or camera.call<jni::Bool>("hasPermissions"))
 		{
-			camera_started = camera.call<jni::Bool>("start");
+			camera_started = camera.call<jni::Bool>("start", jni::Bool(marker_tracking), jni::Bool(rgb_camera_streaming), jni::Bool(depth_camera_streaming));
 			if (camera_started)
-				spdlog::info("Vivarium camera: started");
+				spdlog::info("Sensor streaming: started");
 			else
 			{
-				spdlog::error("Vivarium camera: cannot start, see the VivariumCamera log");
+				spdlog::error("Sensor streaming: cannot start, see the SensorStreaming log");
 				camera_failed = true;
 			}
 		}
