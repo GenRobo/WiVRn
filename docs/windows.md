@@ -117,3 +117,12 @@ Add `--remote-debugging-port=9555` to drive Chrome through the DevTools protocol
 - the same `XDG_RUNTIME_DIR` for the server and Chrome, e.g. `set XDG_RUNTIME_DIR=C:\monado-rt` in both consoles (Monado names its pipe after this directory, which otherwise differs inside the AppContainer; the directory does not need to exist);
 - `set IPC_RELAXED_CONNECTION_SECURITY=1` for the server, so AppContainers can open the pipe;
 - the runtime files readable by AppContainers: `icacls build-win /grant *S-1-15-2-1:(OI)(CI)(RX) /T`.
+
+## Testing the encoders without a headset
+
+`wivrn-handshake-probe` acts as a minimal headset: it pairs with the PIN, sends head tracking and frame feedback, and dumps the video it receives. `tools\windows\encoder-test.ps1` runs it with the server and an OpenXR application ([hello_xr](https://github.com/KhronosGroup/OpenXR-SDK-Source), D3D11), then decodes the dumps with ffmpeg if it is on `PATH`:
+```bat
+cmake --build build-win --target wivrn-server openxr_wivrn wivrn-handshake-probe
+powershell -ExecutionPolicy Bypass -File tools\windows\encoder-test.ps1 -HelloXr C:\path\to\hello_xr.exe -Encoder nvenc -Seconds 30
+```
+`-Encoder` is `auto`, `nvenc`, `vulkan`, `x264` or a configuration file; `-Codecs` and `-BitDepth` set what the fake headset advertises. The server listens on port 9757, so no other server may be running. Results are in `build-win\encoder-test-<encoder>`: `probe-<stream>.bin` are the received bitstreams, `server-<stream>.*` the ones the server encoded.
