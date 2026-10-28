@@ -38,6 +38,8 @@ cmake --build build-win --target wivrn-server openxr_wivrn
 
 The first configuration installs the dependencies listed in `tools/windows/vcpkg.json` into `build-win\vcpkg_installed` (x264 is built from source, this takes a while).
 
+Rebuild **both** `wivrn-server` and `openxr_wivrn` after updating the checkout, then restart the server and VR application. Monado checks their embedded revision strings; a stale runtime DLL can make Chrome report “VR NOT FOUND” even though the headset is connected. Building only the server or handshake probe does not refresh that DLL.
+
 Outputs:
 - `build-win\server\wivrn-server.exe`
 - `build-win\openxr_wivrn-dev.json`, the OpenXR runtime manifest pointing at the runtime DLL in the build tree.
