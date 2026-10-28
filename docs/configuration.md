@@ -231,11 +231,14 @@ No camera app, separate camera TCP connection, or ADB reverse is needed.
 The left passthrough camera produces color JPEG frames and on-headset OpenCV
 4.14 ArUco detections in VCAM version 1. Detection still uses luma; JPEG encoding
 includes the YUV source's chroma. CONFIGURE controls image and detection rates
-within the locally enabled streams; PING/PONG uses the metadata's headset clock.
-LINK_STATUS reports route `2` (WiVRn) with Android's active-network transport. A receiver
-should resend its current CONFIGURE on its first CALIBRATION per TCP connection,
-including after delayed permission prompts. CONFIGURE always refreshes calibration,
-without an echo loop. Sensor messages are serialized before transport
+within the locally enabled streams. Camera modes use their actual timestamp
+source for PING/PONG; depth-only uses CLOCK_BOOTTIME and does not query Camera2.
+LINK_STATUS reports route `2` (WiVRn) with Android's active-network transport.
+A receiver accepts real CALIBRATION or LINK_STATUS as startup readiness and
+resends its current CONFIGURE once per TCP connection. Camera frames and marker
+reports still require calibration; depth does not. CONFIGURE refreshes calibration
+for camera modes or real network status for depth-only, without an echo loop.
+Sensor messages are serialized before transport
 chunking, so concurrent JPEG, markers, status and depth cannot interleave bytes.
 
 Depth is opt-in through both the local switch and CONFIGURE's optional `>BH`

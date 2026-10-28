@@ -34,7 +34,7 @@ class VivariumCamera(private val activity: MainActivity) {
     /** Whether the camera permissions are granted; C++ requests them when not. */
     fun hasPermissions(): Boolean = hasCameraPermissions(activity)
 
-    /** Starts the enabled sensors; false when required camera metadata or capture is unavailable. */
+    /** Starts enabled sensors; camera metadata and capture are required only for images or markers. */
     fun start(markerTracking: Boolean, rgbCameraStreaming: Boolean, depthCameraStreaming: Boolean): Boolean {
         if (stream != null) return true
         val s = CameraStream(

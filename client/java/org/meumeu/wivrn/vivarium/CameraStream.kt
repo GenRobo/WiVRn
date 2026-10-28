@@ -80,12 +80,12 @@ private class Message(capacity: Int) : ByteArrayOutputStream(capacity) {
  * Streams locally enabled passthrough camera images, markers and native depth to the PC
  * over the `vivarium-camera` application data channel of the WiVRn session.
  *
- * The PC receiver on the other end of the channel expects CALIBRATION before anything
- * else and sends CONFIGURE as soon as it connects, then PING every 50 ms. The headset
- * cannot see the PC connect, so a CONFIGURE while unlinked marks the PC as present and
- * is answered with CALIBRATION first; [LINK_TIMEOUT_MS] without a PING marks it gone,
- * and nothing but PONG and CALIBRATION is sent while unlinked. [send] hands one message
- * to the channel; [onDepthConfig] passes the PC's depth request to the C++ depth sender
+ * The PC receiver accepts CALIBRATION for image/marker modes or LINK_STATUS for depth-only
+ * readiness, sends CONFIGURE as soon as it connects, then PING every 50 ms. The headset
+ * cannot see the PC connect, so CONFIGURE or the first PING while unlinked is answered
+ * with readiness metadata before enabling sensor output. [LINK_TIMEOUT_MS] without a
+ * PING marks the PC gone. [send] hands one message to the channel; [onDepthConfig]
+ * passes the PC's depth request to the C++ depth sender
  * with the clock PONG uses (true: `CLOCK_BOOTTIME`, false: `CLOCK_MONOTONIC`).
  */
 class CameraStream(
@@ -97,7 +97,7 @@ class CameraStream(
     private val depthCameraStreaming: Boolean,
 ) {
     @Volatile private var running = false
-    private lateinit var calibration: Calibration
+    private var calibration: Calibration? = null
     private val captureImages = markerTracking || rgbCameraStreaming
     private var cameraThread: HandlerThread? = null
     private lateinit var handler: Handler
@@ -131,26 +131,24 @@ class CameraStream(
     private var detector: Thread? = null
     private var status: Thread? = null
 
-    /** Reads real camera metadata for the handshake; opens capture only for images or markers. */
+    /** Reads real camera metadata and opens capture only for locally enabled images or markers. */
     fun start(): Boolean {
         if (running) return true
         if (captureImages && !hasCameraPermissions(context)) {
             Log.w(TAG, "camera access not granted")
             return false
         }
-        val manager = context.getSystemService(CameraManager::class.java)
-        val id = manager.cameraIdList.firstOrNull { id ->
+        val manager = if (captureImages) context.getSystemService(CameraManager::class.java) else null
+        val id = if (manager != null) manager.cameraIdList.firstOrNull { id ->
             val ch = manager.getCameraCharacteristics(id)
             ch.get(KEY_SOURCE) == SOURCE_PASSTHROUGH && ch.get(KEY_POSITION) == POSITION_LEFT
-        }
-        if (id == null) {
+        } else null
+        if (captureImages && id == null) {
             Log.e(TAG, "no left passthrough camera; is passthrough enabled on Horizon OS v74+?")
             return false
         }
-        // CameraManager permits metadata queries without CAMERA. Android may redact
-        // lens calibration fields; calibrationOf preserves those as unknown (NaN).
-        val characteristics = manager.getCameraCharacteristics(id)
-        calibration = calibrationOf(id, characteristics)
+        val characteristics = if (manager != null && id != null) manager.getCameraCharacteristics(id) else null
+        calibration = if (id != null && characteristics != null) calibrationOf(id, characteristics) else null
         network = NetworkStatus(context) { statusWake.offer(Unit) }.also { it.start() }
         running = true
         if (rgbCameraStreaming) {
@@ -166,7 +164,7 @@ class CameraStream(
             }
         }
         status = thread(name = "sensor-status") { statusLoop() }
-        if (captureImages) {
+        if (manager != null && id != null && characteristics != null) {
             val captureThread = HandlerThread("sensor-camera").apply { start() }
             cameraThread = captureThread
             handler = Handler(captureThread.looper)
@@ -215,9 +213,10 @@ class CameraStream(
         )
     }
 
-    private fun bootClock() = calibration.timestampSource == CameraCharacteristics.SENSOR_INFO_TIMESTAMP_SOURCE_REALTIME
+    private fun bootClock() = calibration?.timestampSource
+        ?.let { it == CameraCharacteristics.SENSOR_INFO_TIMESTAMP_SOURCE_REALTIME } ?: true
 
-    /** Headset clock that SENSOR_TIMESTAMP uses, for clock-sync replies. */
+    /** Camera SENSOR_TIMESTAMP clock when capturing; CLOCK_BOOTTIME for depth-only. */
     private fun clockNs(): Long = if (bootClock()) SystemClock.elapsedRealtimeNanos() else System.nanoTime()
 
     @SuppressLint("MissingPermission") // start() checks the permissions first.
@@ -375,7 +374,7 @@ class CameraStream(
 
     /**
      * Network thread: bytes from the PC. Answers pings, applies configure messages and
-     * sends the calibration when the PC appears.
+     * sends readiness metadata before enabling sensor output when the PC appears.
      */
     fun receive(chunk: ByteArray) {
         if (!running) return
@@ -393,9 +392,7 @@ class CameraStream(
         when (type) {
             StreamFormat.TYPE_PING -> {
                 if (!linked) {
-                    reply.reset()
-                    StreamFormat.writeCalibration(reply.out, calibration)
-                    send(reply.toByteArray())
+                    if (!sendReadiness()) return
                     setLinked(true)
                 }
                 val ping = StreamFormat.parsePing(body)
@@ -407,10 +404,8 @@ class CameraStream(
                 val parsed = StreamFormat.parseConfigure(body)
                 // Relay sinks may reconnect while the headset link remains alive.
                 // Refresh metadata for every configure; the receiver only answers
-                // its first calibration with CONFIGURE, so there is no echo loop.
-                reply.reset()
-                StreamFormat.writeCalibration(reply.out, calibration)
-                send(reply.toByteArray())
+                // its first readiness message with CONFIGURE, so there is no echo loop.
+                if (!sendReadiness()) return
                 config = parsed
                 if (linked) {
                     onDepthConfig(depthCameraStreaming && parsed.depth, parsed.depthRateHz, bootClock())
@@ -421,6 +416,19 @@ class CameraStream(
             }
             else -> throw IOException("unexpected message type $type")
         }
+    }
+
+    /** Network thread: publish real metadata before linking or activating depth. */
+    private fun sendReadiness(): Boolean {
+        reply.reset()
+        val cameraCalibration = calibration
+        if (cameraCalibration != null) {
+            StreamFormat.writeCalibration(reply.out, cameraCalibration)
+        } else {
+            val status = network?.read(clockNs()) ?: return false
+            StreamFormat.writeLinkStatus(reply.out, status)
+        }
+        return send(reply.toByteArray())
     }
 
     private fun setLinked(value: Boolean) {
