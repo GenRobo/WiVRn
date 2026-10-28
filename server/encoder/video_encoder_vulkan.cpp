@@ -1055,14 +1055,42 @@ std::optional<wivrn::video_encoder::data> wivrn::video_encoder_vulkan::encode(ui
 
 	if (vk.device.waitForFences(*slot_item.fence, true, 1'000'000'000) == vk::Result::eTimeout)
 	{
-		U_LOG_E("Timeout on stream %d", stream_idx);
+		U_LOG_E("Timeout on stream %d (slot %d, frame %" PRIu64 ")", stream_idx, int(encode_slot), frame_index);
 		return {};
 	}
 
-	auto [res, size] = query_pool.getResult<uint32_t>(encode_slot, 1, 0, vk::QueryResultFlagBits::eWait);
-	if (res != vk::Result::eSuccess)
+	// Read the encode feedback (bytes written) together with the query result status, without eWait:
+	// the fence above guarantees the encode finished, so an unavailable or failed query is an error,
+	// not something to block on forever.
+	uint32_t size = 0;
 	{
-		std::cerr << "device.getQueryPoolResults: " << vk::to_string(res) << std::endl;
+		struct
+		{
+			uint32_t bytes;
+			int32_t status; // VkQueryResultStatusKHR
+		} result{};
+		vk::Result res = vk::Result::eNotReady;
+		for (int attempt = 0; attempt < 100; ++attempt)
+		{
+			res = vk::Result(vk.device.getDispatcher()->vkGetQueryPoolResults(*vk.device, *query_pool, encode_slot, 1, sizeof(result), &result, sizeof(result), VK_QUERY_RESULT_WITH_STATUS_BIT_KHR));
+			if (res != vk::Result::eNotReady)
+				break;
+			std::this_thread::sleep_for(std::chrono::milliseconds(1));
+		}
+		static thread_local int32_t last_status[3] = {INT32_MIN, INT32_MIN, INT32_MIN};
+		static std::atomic<int> detailed_frames = 0;
+		bool detail = detailed_frames.fetch_add(1) < 12;
+		if (detail or result.status != last_status[stream_idx % 3] or res != vk::Result::eSuccess)
+			U_LOG_I("vulkan encode stream %d slot %d frame %" PRIu64 ": query %s, status %d (%s), %u bytes",
+			        stream_idx, int(encode_slot), frame_index, vk::to_string(res).c_str(), result.status,
+			        result.status > 0 ? "complete" : result.status == 0 ? "not ready" : "ERROR", result.bytes);
+		last_status[stream_idx % 3] = result.status;
+		if (res != vk::Result::eSuccess or result.status <= 0)
+		{
+			U_LOG_E("vulkan encode failed on stream %d frame %" PRIu64 ": query %s, status %d", stream_idx, frame_index, vk::to_string(res).c_str(), result.status);
+			return {};
+		}
+		size = result.bytes;
 	}
 
 	if (auto s = ts_pool.collect(encode_slot))
