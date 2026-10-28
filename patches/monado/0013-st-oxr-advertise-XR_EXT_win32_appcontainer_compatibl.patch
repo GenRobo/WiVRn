@@ -1,0 +1,26 @@
+From 15cdc91b3bed7e1c56789db43c2e7abc983d2384 Mon Sep 17 00:00:00 2001
+From: Geordie Moffatt <geordie.moffatt@generalrobotics.company>
+Date: Tue, 27 Oct 2026 17:27:17 -0700
+Subject: [PATCH 13/14] st/oxr: advertise XR_EXT_win32_appcontainer_compatible
+ on Windows
+
+Sandboxed clients running in an AppContainer (e.g. Chrome's XR process) load the runtime, then refuse it unless this extension is listed.
+---
+ .../oxr/extension_support/oxr_extension_support.py               | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/src/xrt/state_trackers/oxr/extension_support/oxr_extension_support.py b/src/xrt/state_trackers/oxr/extension_support/oxr_extension_support.py
+index e9be594f9..9de4f66e8 100644
+--- a/src/xrt/state_trackers/oxr/extension_support/oxr_extension_support.py
++++ b/src/xrt/state_trackers/oxr/extension_support/oxr_extension_support.py
+@@ -84,6 +84,7 @@ EXTENSIONS = (
+     ['XR_EXT_plane_detection', 'XRT_FEATURE_OPENXR_PLANE_DETECTION'],
+     ['XR_EXT_samsung_odyssey_controller', 'XRT_FEATURE_OPENXR_INTERACTION_WINMR'],
+     ['XR_EXT_user_presence', 'XRT_FEATURE_OPENXR_USER_PRESENCE'],
++    ['XR_EXT_win32_appcontainer_compatible', 'XR_USE_PLATFORM_WIN32'],
+     # Vendor extensions, sorted alphabetically.
+     ['XR_ANDROID_face_tracking', 'XRT_FEATURE_OPENXR_FACE_TRACKING_ANDROID'],
+     ['XR_BD_body_tracking', 'XRT_FEATURE_OPENXR_BODY_TRACKING_BD'],
+-- 
+2.49.0.windows.1
+

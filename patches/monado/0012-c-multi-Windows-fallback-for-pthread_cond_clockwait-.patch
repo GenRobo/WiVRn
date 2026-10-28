@@ -1,0 +1,37 @@
+From 84e45c7fa97bddd5d1d44f23f924d789b5a4587e Mon Sep 17 00:00:00 2001
+From: Geordie Moffatt <geordie.moffatt@generalrobotics.company>
+Date: Tue, 27 Oct 2026 17:27:17 -0700
+Subject: [PATCH 12/14] c/multi: Windows fallback for pthread_cond_clockwait in
+ early wake
+
+pthreads4w (MSVC) has no pthread_cond_clockwait: convert the monotonic deadline to a realtime one and use pthread_cond_timedwait.
+---
+ src/xrt/compositor/multi/comp_multi_system.c | 9 ++++++++-
+ 1 file changed, 8 insertions(+), 1 deletion(-)
+
+diff --git a/src/xrt/compositor/multi/comp_multi_system.c b/src/xrt/compositor/multi/comp_multi_system.c
+index 8c02280b0..760726a97 100644
+--- a/src/xrt/compositor/multi/comp_multi_system.c
++++ b/src/xrt/compositor/multi/comp_multi_system.c
+@@ -449,10 +449,17 @@ wait_frame(struct multi_system_compositor *msc, struct xrt_compositor *xc, int64
+ 
+ 	// When we should wake up is in the past:ish.
+ 	if (! fuzzy_in_the_past) {
++		os_mutex_lock(&msc->wake_mutex);
++#ifdef XRT_OS_LINUX
+ 		struct timespec wake_ts;
+ 		os_ns_to_timespec(wake_up_time_ns, &wake_ts);
+-		os_mutex_lock(&msc->wake_mutex);
+ 		pthread_cond_clockwait(&msc->wake_cond.cond, &msc->wake_mutex.mutex, CLOCK_MONOTONIC, &wake_ts);
++#else
++		// No pthread_cond_clockwait outside glibc: convert the monotonic deadline to a realtime one.
++		struct timespec wake_ts;
++		os_semaphore_get_realtime_clock(&wake_ts, (uint64_t)(wake_up_time_ns - now_ns));
++		pthread_cond_timedwait(&msc->wake_cond.cond, &msc->wake_mutex.mutex, &wake_ts);
++#endif
+ 		os_mutex_unlock(&msc->wake_mutex);
+ 	}
+ }
+-- 
+2.49.0.windows.1
+

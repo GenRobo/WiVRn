@@ -251,10 +251,18 @@ FetchContent_Declare(libktx        EXCLUDE_FROM_ALL SYSTEM URL https://github.co
                                    )
 FetchContent_Declare(implot        EXCLUDE_FROM_ALL SYSTEM URL https://github.com/epezent/implot/releases/download/v1.0/implot-v1.0.tar.gz
                                    URL_HASH SHA256=20ca14d5a46f36a650746096c74eba8bea99c9432cd3c877343b96b17a6ae566)
+# patches/apply.sh is a POSIX shell script: on Windows, run it with the sh that comes with Git for Windows
+set(APPLY_PATCHES ${CMAKE_CURRENT_LIST_DIR}/patches/apply.sh)
+if (WIN32)
+    get_filename_component(_git_dir "${GIT_EXECUTABLE}" DIRECTORY)
+    find_program(SH_EXECUTABLE sh HINTS "${_git_dir}/../bin" "${_git_dir}/../usr/bin" REQUIRED)
+    set(APPLY_PATCHES ${SH_EXECUTABLE} ${APPLY_PATCHES})
+endif()
+
 file(GLOB IMGUI_PATCHES CONFIGURE_DEPENDS patches/imgui/*)
 FetchContent_Declare(imgui         EXCLUDE_FROM_ALL SYSTEM URL https://github.com/ocornut/imgui/archive/refs/tags/v1.92.9.tar.gz
                                    URL_HASH SHA256=af97ed649182c39314320514a672b82008ab462b9293fe23d37b30bfa5d05519
-                                   PATCH_COMMAND    ${CMAKE_CURRENT_LIST_DIR}/patches/apply.sh ${IMGUI_PATCHES}
+                                   PATCH_COMMAND    ${APPLY_PATCHES} ${IMGUI_PATCHES}
 )
 FetchContent_Declare(uni-algo      EXCLUDE_FROM_ALL SYSTEM URL https://github.com/uni-algo/uni-algo/archive/v1.2.0.tar.gz
                                    URL_HASH SHA256=f2a1539cd8635bc6088d05144a73ecfe7b4d74ee0361fabed6f87f9f19e74ca9)
@@ -273,7 +281,7 @@ FetchContent_Declare(monado
     GIT_REPOSITORY   https://gitlab.freedesktop.org/monado/monado.git
     # The flatpak manifest is updated automatically
     GIT_TAG          ${MONADO_REV}
-    PATCH_COMMAND    ${CMAKE_CURRENT_LIST_DIR}/patches/apply.sh ${MONADO_PATCHES}
+    PATCH_COMMAND    ${APPLY_PATCHES} ${MONADO_PATCHES}
     EXCLUDE_FROM_ALL
 )
 

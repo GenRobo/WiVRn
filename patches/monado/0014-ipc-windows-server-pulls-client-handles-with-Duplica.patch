@@ -1,0 +1,88 @@
+From c28ab36369d549a025c74db9e089e22be821e90d Mon Sep 17 00:00:00 2001
+From: Geordie Moffatt <geordie.moffatt@generalrobotics.company>
+Date: Tue, 27 Oct 2026 17:27:17 -0700
+Subject: [PATCH 14/14] ipc/windows: server pulls client handles with
+ DuplicateHandle
+
+AppContainer clients cannot OpenProcess(PROCESS_DUP_HANDLE) on the service, so swapchain image handles never reached it. Clients now send their own handle values and the server duplicates them from the client process. The server to client direction is unchanged.
+---
+ .../shared/ipc_message_channel_windows.cpp    | 45 ++++++++++++++++++-
+ 1 file changed, 43 insertions(+), 2 deletions(-)
+
+diff --git a/src/xrt/ipc/shared/ipc_message_channel_windows.cpp b/src/xrt/ipc/shared/ipc_message_channel_windows.cpp
+index ae745a3c0..76b22868b 100644
+--- a/src/xrt/ipc/shared/ipc_message_channel_windows.cpp
++++ b/src/xrt/ipc/shared/ipc_message_channel_windows.cpp
+@@ -51,6 +51,13 @@
+  *
+  */
+ 
++static bool
++is_server_end(struct ipc_message_channel *imc)
++{
++	DWORD flags = 0;
++	return GetNamedPipeInfo(imc->ipc_handle, &flags, NULL, NULL, NULL) && (flags & PIPE_SERVER_END);
++}
++
+ static HANDLE
+ open_target_process_dup_handle(struct ipc_message_channel *imc)
+ {
+@@ -142,7 +149,37 @@ ipc_receive_handles(
+ 	if (rc != XRT_SUCCESS) {
+ 		return rc;
+ 	}
+-	return ipc_receive(imc, out_handles, handle_count * sizeof(*out_handles));
++	rc = ipc_receive(imc, out_handles, handle_count * sizeof(*out_handles));
++	if (rc != XRT_SUCCESS || handle_count == 0 || !is_server_end(imc)) {
++		return rc;
++	}
++
++	/*
++	 * Clients send their own handle values; the server pulls them. AppContainer clients (e.g. Chrome's
++	 * sandboxed XR process) cannot OpenProcess(PROCESS_DUP_HANDLE) the service, but the service can open them.
++	 * The client keeps its handles open until the synchronous call returns, so this is race-free.
++	 */
++	HANDLE source_process = open_target_process_dup_handle(imc);
++	if (!source_process) {
++		return XRT_ERROR_IPC_FAILURE;
++	}
++	HANDLE current_process = GetCurrentProcess();
++	for (uint32_t i = 0; i < handle_count; i++) {
++		HANDLE h = out_handles[i];
++		if (h == NULL || h == INVALID_HANDLE_VALUE || ((size_t)h & 1)) {
++			// Null, or a handle that cannot be duplicated (global D3D KMT handle): pass through.
++			continue;
++		}
++		if (!DuplicateHandle(source_process, h, current_process, &out_handles[i], 0, false,
++		                     DUPLICATE_SAME_ACCESS)) {
++			DWORD err = GetLastError();
++			IPC_ERROR(imc, "DuplicateHandle(%p) from client failed: %lu %s", h, err, ipc_winerror(err));
++			CloseHandle(source_process);
++			return XRT_ERROR_IPC_FAILURE;
++		}
++	}
++	CloseHandle(source_process);
++	return XRT_SUCCESS;
+ }
+ 
+ xrt_result_t
+@@ -153,11 +190,15 @@ ipc_send_handles(
+ 	if (xret != XRT_SUCCESS) {
+ 		return xret;
+ 	}
+-
+ 	if (!handle_count) {
+ 		return ipc_send(imc, nullptr, 0);
+ 	}
+ 
++	if (!is_server_end(imc)) {
++		// Client side: send our own handle values, the server duplicates them (see ipc_receive_handles).
++		return ipc_send(imc, handles, handle_count * sizeof(*handles));
++	}
++
+ 	HANDLE target_process = open_target_process_dup_handle(imc);
+ 	if (!target_process) {
+ 		DWORD err = GetLastError();
+-- 
+2.49.0.windows.1
+
