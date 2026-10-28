@@ -138,9 +138,10 @@ if (WIVRN_BUILD_SERVER)
 			utils/gpu_timestamp_pool.cpp
 		)
 	if (WIN32)
-		# Headless Windows supervisor: no D-Bus/Avahi/libnotify/systemd/fork, no app launcher, no uinput
-		target_sources(wivrn-server PRIVATE main_windows.cpp)
-		target_link_libraries(wivrn-server PRIVATE ws2_32)
+		# Headless Windows supervisor: no D-Bus/libnotify/systemd/fork, no app launcher, no uinput;
+		# mDNS through the Windows DNS-SD API instead of Avahi
+		target_sources(wivrn-server PRIVATE main_windows.cpp dnssd_publisher_windows.cpp)
+		target_link_libraries(wivrn-server PRIVATE ws2_32 dnsapi)
 	else()
 		target_sources(wivrn-server PRIVATE
 			active_runtime.cpp

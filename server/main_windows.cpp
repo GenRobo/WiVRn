@@ -21,16 +21,18 @@
  * @file
  * @brief  Headless Windows supervisor for the WiVRn Monado service.
  *
- * Replaces the Linux main.cpp (GLib main loop, D-Bus, Avahi, libnotify, systemd/fork app launcher,
- * active-runtime management). One headset session per process: listen on TCP <port>, authenticate,
- * run Monado's IPC server in-process until the session ends, then exit (restart the process to
- * accept the next session).
+ * Replaces the Linux main.cpp (GLib main loop, D-Bus, libnotify, systemd/fork app launcher,
+ * active-runtime management). One headset session per process: publish the service with DNS-SD,
+ * listen on TCP <port>, authenticate, run Monado's IPC server in-process until the session ends,
+ * then exit (restart the process to accept the next session).
  */
 
+#include "dnssd_publisher_windows.h"
 #include "driver/configuration.h"
 #include "driver/wivrn_connection.h"
 #include "exit_codes.h"
 #include "ipc_server_cb.h"
+#include "protocol_version.h"
 #include "utils/overloaded.h"
 #include "version.h"
 #include "wivrn_config.h"
@@ -43,12 +45,14 @@
 
 #include <CLI/CLI.hpp>
 #include <atomic>
+#include <cinttypes>
 #include <cstdarg>
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
 #include <iostream>
 #include <mutex>
+#include <optional>
 #include <random>
 #include <streambuf>
 #include <thread>
@@ -260,8 +264,9 @@ int main(int argc, char * argv[])
 	auto pairing = app.add_flag("--pair")->description("enable pairing (a PIN is printed) even if headsets are already known");
 	std::string log_dir;
 	app.add_option("--log-dir", log_dir, "also write the log to <dir>/wivrn-server-<time>.log (default %LOCALAPPDATA%\\wivrn\\logs)")->option_text("DIR");
+	auto no_publish = app.add_flag("--no-publish-service")->description("disable publishing the service through mDNS");
 	// Accepted for command-line compatibility with the Linux server; these features don't exist here.
-	app.add_flag("--no-publish-service,--no-manage-active-runtime,--no-fork,--no-instructions")->group("");
+	app.add_flag("--no-manage-active-runtime,--no-fork,--no-instructions")->group("");
 
 	CLI11_PARSE(app, argc, argv);
 
@@ -308,6 +313,27 @@ int main(int argc, char * argv[])
 		}
 
 		const int port = configuration().port;
+
+		// Published for the whole process lifetime, like on Linux; deregistered when main returns
+		std::optional<dnssd_publisher> publisher;
+		if (not *no_publish and configuration().publication != service_publication::none)
+		{
+			char protocol_string[17];
+			snprintf(protocol_string, sizeof(protocol_string), "%016" PRIx64, wivrn::protocol_version);
+			try
+			{
+				publisher.emplace(configuration().hostname, "_wivrn._tcp", port, std::map<std::string, std::string>{
+				                                                                         {"protocol", protocol_string},
+				                                                                         {"version", wivrn::display_version()},
+				                                                                         {"cookie", server_cookie()},
+				                                                                 });
+			}
+			catch (std::exception & e)
+			{
+				std::cerr << "Cannot publish the service with mDNS, connect the headset manually: " << e.what() << std::endl;
+			}
+		}
+
 		auto delay_next_try = std::chrono::milliseconds(10);
 
 		while (not quitting)
@@ -318,7 +344,7 @@ int main(int argc, char * argv[])
 				// (accept_connection) binds the same port again, and Windows refuses a second listener
 				// (WSAEADDRINUSE) while this one is open.
 				TCPListener listener(port);
-				std::cerr << "Listening on TCP port " << port << " (UDP on the same port once a headset connects); no mDNS, connect manually" << std::endl;
+				std::cerr << "Listening on TCP port " << port << " (UDP on the same port once a headset connects)" << std::endl;
 
 				while (not quitting and not tcp)
 				{
