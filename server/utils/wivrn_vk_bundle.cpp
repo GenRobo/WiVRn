@@ -231,14 +231,24 @@ wivrn::vk_bundle::vk_bundle() :
 		        VK_KHR_EXTERNAL_MEMORY_EXTENSION_NAME,
 		        VK_KHR_EXTERNAL_SEMAPHORE_EXTENSION_NAME,
 		        VK_KHR_GET_MEMORY_REQUIREMENTS_2_EXTENSION_NAME,
+#ifdef _WIN32
+		        "VK_KHR_external_memory_win32",
+#else
 		        VK_KHR_EXTERNAL_MEMORY_FD_EXTENSION_NAME,
+#endif
 		};
 		// Optional extensions
 		std::set<const char *, strless> opt_device_extensions = {
-		        // For Monado
+		        // For Monado (Windows: Win32 handles for swapchain images and sync objects)
+#ifdef _WIN32
+		        "VK_KHR_external_fence_win32",
+		        "VK_KHR_external_semaphore_win32",
+		        "VK_KHR_external_memory_win32",
+#else
 		        VK_KHR_EXTERNAL_FENCE_FD_EXTENSION_NAME,
 		        VK_KHR_EXTERNAL_SEMAPHORE_FD_EXTENSION_NAME,
 		        VK_KHR_EXTERNAL_MEMORY_FD_EXTENSION_NAME,
+#endif
 		        VK_KHR_IMAGE_FORMAT_LIST_EXTENSION_NAME,
 		        VK_KHR_MAINTENANCE_1_EXTENSION_NAME,
 		        VK_KHR_MAINTENANCE_2_EXTENSION_NAME,
