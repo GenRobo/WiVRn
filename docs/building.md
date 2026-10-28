@@ -2,6 +2,8 @@
 
 # Server (PC)
 
+For Windows, see [Server on Windows](windows.md).
+
 ## Compile
 
 From your checkout directory, with automatic detection of encoders

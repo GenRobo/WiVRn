@@ -1,0 +1,21 @@
+{
+    "name": "wivrn-server-windows",
+    "version-string": "26.9",
+    "description": "Dependencies of the WiVRn server and OpenXR runtime on Windows (see docs/windows.md)",
+    "dependencies": [
+        { "name": "wil", "platform": "windows" },
+        { "name": "pthreads", "platform": "windows" },
+        "cjson",
+        "eigen3",
+        { "name": "glslang", "features": ["tools"] },
+        { "name": "spirv-tools", "features": ["tools"] },
+        "vulkan",
+        "vulkan-headers",
+        "openssl",
+        "boost-pfr",
+        "nlohmann-json",
+        "cli11",
+        "x264"
+    ],
+    "builtin-baseline": "866e9e258a76437074a5cf02d4c2d71b53bff2f8"
+}
