@@ -5,7 +5,28 @@
 #include <map>
 #include <vector>
 
+#ifdef _WIN32
+#include <stdexcept>
+// No uinput on Windows: construction fails, so the session reports hid_input=false and keeps
+// the OpenXR controllers/gamepad (wivrn_session catches the exception).
+class wivrn_uinput
+{
+public:
+	wivrn_uinput()
+	{
+		throw std::runtime_error("input forwarding is not supported on Windows");
+	}
+	void handle_input(wivrn::from_headset::hid::input &) {}
+	void handle_gamepad(const wivrn::from_headset::inputs &) {}
+	void destroy_gamepad() {}
+	std::vector<wivrn::to_headset::haptics> read_rumble()
+	{
+		return {};
+	}
+};
+#else
 #include <linux/uinput.h>
+
 
 class wivrn_uinput
 {
@@ -41,3 +62,4 @@ private:
 	wivrn::fd_base gamepad_fd;
 	std::map<int16_t, ff_effect> ff_effects;
 };
+#endif

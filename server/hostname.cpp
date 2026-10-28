@@ -1,3 +1,17 @@
+#ifdef _WIN32
+#include "hostname.h"
+
+#include <windows.h>
+
+std::string wivrn::hostname()
+{
+	char buf[MAX_COMPUTERNAME_LENGTH + 1];
+	DWORD size = sizeof(buf);
+	if (GetComputerNameA(buf, &size))
+		return std::string(buf, size);
+	return "no-hostname";
+}
+#else
 #include "hostname.h"
 #include <limits.h>
 #include <unistd.h>
@@ -74,3 +88,4 @@ std::string wivrn::hostname()
 	static std::string result = _hostname();
 	return result;
 }
+#endif

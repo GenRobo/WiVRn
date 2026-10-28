@@ -21,12 +21,16 @@
 #include "wivrn_session.h"
 
 #include "accept_connection.h"
+#ifndef _WIN32
 #include "application.h"
+#endif
 #include "configuration.h"
 #include "driver/app_pacer.h"
 #include "driver/xrt_cast.h"
 #include "server/ipc_server.h"
+#ifndef _WIN32
 #include "utils/load_icon.h"
+#endif
 #include "utils/method.h"
 #include "utils/scoped_lock.h"
 #include "utils/wivrn_trace.h"
@@ -378,9 +382,9 @@ void wivrn_session::stop()
 
 void wivrn_session::request_stop()
 {
-	stop_application(std::nullopt, 2l * U_TIME_1S_IN_NS);
+	stop_application(std::nullopt, int64_t(2) * U_TIME_1S_IN_NS);
 
-	int64_t end = os_monotonic_get_ns() + 3l * U_TIME_1S_IN_NS;
+	int64_t end = os_monotonic_get_ns() + int64_t(3) * U_TIME_1S_IN_NS;
 	while (os_monotonic_get_ns() < end)
 	{
 		{
@@ -885,6 +889,11 @@ void wivrn_session::operator()(from_headset::get_application_list && request)
 	        .variant = std::move(request.variant),
 	};
 
+#ifdef _WIN32
+	// No desktop application discovery on Windows: report an empty list.
+	send_control(std::move(response));
+	return;
+#else
 	auto apps = list_applications();
 
 	for (const auto & [id, app]: apps)
@@ -926,6 +935,7 @@ void wivrn_session::operator()(from_headset::get_application_list && request)
 			}
 		}
 	}
+#endif
 }
 
 void wivrn_session::operator()(const from_headset::start_app & request)
@@ -969,7 +979,7 @@ void wivrn_session::operator()(const from_headset::set_active_application & req)
 
 void wivrn_session::operator()(const from_headset::stop_application & req)
 {
-	stop_application(req.id, 10l * U_TIME_1S_IN_NS);
+	stop_application(req.id, int64_t(10) * U_TIME_1S_IN_NS);
 }
 
 void wivrn_session::operator()(audio_data && data)
