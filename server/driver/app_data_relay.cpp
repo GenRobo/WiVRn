@@ -41,6 +41,13 @@ using namespace std::chrono_literals;
 
 namespace
 {
+#ifdef _WIN32
+constexpr int send_flags = 0;
+#else
+// A sink that went away must not kill the server with SIGPIPE
+constexpr int send_flags = MSG_NOSIGNAL;
+#endif
+
 std::system_error socket_error()
 {
 	return std::system_error{wivrn::last_socket_error(), wivrn::socket_error_category()};
@@ -286,7 +293,6 @@ TCP app_data_relay::connect(std::stop_token stop)
 			}
 			if (not done)
 				throw std::runtime_error("timeout");
-			set_nonblocking(fd, false);
 			return tcp;
 		}
 		catch (const std::exception & e)
@@ -328,7 +334,11 @@ void app_data_relay::serve(std::stop_token stop, TCP & tcp)
 			if (n == 0)
 				return;
 			if (n < 0)
+			{
+				if (would_block(last_socket_error()))
+					continue;
 				throw socket_error();
+			}
 			try
 			{
 				session.send_control(to_headset::app_data{
@@ -351,13 +361,13 @@ void app_data_relay::serve(std::stop_token stop, TCP & tcp)
 			drain(wake_receiver.get_fd());
 			if (stop.stop_requested())
 				return;
-			if (not flush_queue(tcp))
+			if (not flush_queue(stop, tcp))
 				throw std::runtime_error("cannot write to sink: " + socket_error_message());
 		}
 	}
 }
 
-bool app_data_relay::flush_queue(TCP & tcp)
+bool app_data_relay::flush_queue(std::stop_token stop, TCP & tcp)
 {
 	std::deque<std::vector<uint8_t>> pending;
 	{
@@ -365,18 +375,40 @@ bool app_data_relay::flush_queue(TCP & tcp)
 		pending.swap(queue);
 		queued_bytes = 0;
 	}
+	size_t remaining = 0;
+	for (const auto & data: pending)
+		remaining += data.size();
 	for (const auto & data: pending)
 	{
 		size_t offset = 0;
 		while (offset < data.size())
 		{
-			auto n = ::send(tcp.get_fd(), (const char *)data.data() + offset, (int)(data.size() - offset), 0);
+			if (stop.stop_requested())
+			{
+				bytes_dropped += remaining;
+				return true;
+			}
+			auto n = ::send(tcp.get_fd(), (const char *)data.data() + offset, (int)(data.size() - offset), send_flags);
 			if (n < 0)
 			{
-				bytes_dropped += data.size() - offset;
+				if (would_block(last_socket_error()))
+				{
+					pollfd_t fd{};
+					fd.fd = tcp.get_fd();
+					fd.events = POLLOUT;
+					if (poll_sockets(&fd, 1, 100) >= 0)
+						continue;
+				}
+				bytes_dropped += remaining;
+				return false;
+			}
+			if (n == 0)
+			{
+				bytes_dropped += remaining;
 				return false;
 			}
 			offset += n;
+			remaining -= n;
 			bytes_to_sink += n;
 		}
 	}
