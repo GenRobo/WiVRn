@@ -17,6 +17,7 @@
  */
 
 #include "app_pacer.h"
+#include "configuration.h"
 
 #include "util/u_debug.h"
 #include "util/u_time.h"
@@ -27,7 +28,7 @@
 #include <cmath>
 #include <ranges>
 
-// Default value is half the compositor margin
+// Default value is half the compositor margin, overridden by "app-margin-ms" in the configuration file
 DEBUG_GET_ONCE_FLOAT_OPTION(min_margin_ms, "U_PACING_APP_MIN_MARGIN_MS", 1.5f)
 
 namespace wivrn
@@ -79,7 +80,7 @@ public:
 	        },
 	        parent(parent),
 	        min_margin_ms{
-	                .val = debug_get_float_option_min_margin_ms(),
+	                .val = parent.min_margin_ms,
 	                .step = 0.1,
 	                .min = 0.5,
 	                .max = 5.0,
@@ -224,7 +225,8 @@ pacing_app_factory::pacing_app_factory() :
         u_pacing_app_factory{
                 .create = method_pointer<&pacing_app_factory::create>,
                 .destroy = method_pointer<&pacing_app_factory::destroy>,
-        }
+        },
+        min_margin_ms(configuration().app_margin_ms.value_or(debug_get_float_option_min_margin_ms()))
 {
 }
 
