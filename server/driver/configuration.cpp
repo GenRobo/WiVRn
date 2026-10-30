@@ -230,6 +230,13 @@ configuration::configuration()
 		if (auto it = json.find("bit-depth"); it != json.end())
 			bit_depth = *it;
 
+		if (auto it = json.find("app-margin-ms"); it != json.end())
+		{
+			app_margin_ms = *it;
+			if (not(*app_margin_ms >= 0.5f and *app_margin_ms <= 5.0f))
+				throw std::runtime_error("invalid app-margin-ms setting, supported range: 0.5 to 5");
+		}
+
 		if (auto it = json.find("tcp-only"); it != json.end())
 			tcp_only = *it;
 
