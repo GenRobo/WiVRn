@@ -118,6 +118,7 @@ if (WIVRN_BUILD_SERVER)
 			driver/clock_offset.cpp
 			driver/configuration.cpp
 			driver/hand_joints_list.cpp
+			driver/health_rules.cpp
 			driver/pose_list.cpp
 			driver/tracking_control.cpp
 			driver/view_list.cpp
@@ -303,21 +304,20 @@ if (WIVRN_BUILD_SERVER)
 	install(TARGETS wivrn-server)
 
 	if (WIVRN_BUILD_TEST)
-		# Stream health rules (GRID #2834). The stub makes the tests build and run before
-		# milestone 2 provides driver/health_rules.cpp; WILL_FAIL keeps ctest green until then.
+		# Stream health rules (GRID #2834): the pure rules the server runs, replayed over recorded sessions.
 		add_executable(wivrn-health-test
 			tests/health_rules.cpp
-			tests/health_stub.cpp
+			driver/health_rules.cpp
 		)
 		target_compile_features(wivrn-health-test PRIVATE cxx_std_20)
 		target_include_directories(wivrn-health-test PRIVATE .)
+		target_link_libraries(wivrn-health-test PRIVATE nlohmann_json::nlohmann_json)
 		add_test(NAME health_rules COMMAND wivrn-health-test ${CMAKE_CURRENT_SOURCE_DIR}/tests/health_fixtures)
-		set_tests_properties(health_rules PROPERTIES WILL_FAIL TRUE) # expected to fail: GRID #2834 milestone 2
 		if (WIN32)
 			# Needs a GPU, an encoder and hello_xr (WIVRN_HELLO_XR or -HelloXr); skips (77) without hello_xr.
 			add_test(NAME health_integration
 				COMMAND powershell -NoProfile -ExecutionPolicy Bypass -File ${CMAKE_SOURCE_DIR}/tools/windows/health-test.ps1 -BuildDir ${CMAKE_BINARY_DIR})
-			set_tests_properties(health_integration PROPERTIES WILL_FAIL TRUE SKIP_RETURN_CODE 77 LABELS gpu) # expected to fail: GRID #2834 milestone 2
+			set_tests_properties(health_integration PROPERTIES SKIP_RETURN_CODE 77 LABELS gpu)
 		endif()
 	endif()
 endif()
