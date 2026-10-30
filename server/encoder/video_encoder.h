@@ -137,6 +137,18 @@ public:
 	void set_bitrate(uint32_t bitrate_bps);
 	void set_framerate(float framerate);
 
+	/// Stream health (GRID #2834): the per-stream pipeline counters since the last call,
+	/// summed over the three streams (presented, skipped waiting for acknowledgement, bytes and
+	/// shards sent). The same counters feed the five-second log line.
+	struct health_counters
+	{
+		uint64_t presented;
+		uint64_t skipped;
+		uint64_t bytes;
+		uint64_t shards;
+	};
+	static health_counters take_health_counters();
+
 	void encode(wivrn_session & cnx,
 	            const to_headset::video_stream_data_shard::view_info_t & view_info,
 	            uint64_t frame_index);

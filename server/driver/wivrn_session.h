@@ -22,6 +22,7 @@
 #include "app_pacer.h"
 #include "clock_offset.h"
 #include "compositor/compositor.h"
+#include "health_monitor.h"
 #include "inplace_vector.hpp"
 #include "tracking_control.h"
 #include "utils/thread_safe.h"
@@ -110,6 +111,11 @@ class wivrn_session : public xrt_system_devices
 	bool gamepad_connected = false; // network thread only
 	std::vector<std::unique_ptr<app_data_relay>> app_data_relays;
 	std::set<std::string> app_data_unknown_channels; // network thread only
+
+	// Stream health monitor (GRID #2834): alive while the headset session is resumed.
+	std::unique_ptr<health_monitor> health;
+	thread_safe<from_headset::battery> last_battery;
+	std::atomic<float> active_refresh_hz{0};
 
 	clock_offset_estimator offset_est;
 	std::atomic<XrDuration> tracking_latency; // production to reception time

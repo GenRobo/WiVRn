@@ -118,6 +118,7 @@ if (WIVRN_BUILD_SERVER)
 			driver/clock_offset.cpp
 			driver/configuration.cpp
 			driver/hand_joints_list.cpp
+			driver/health_monitor.cpp
 			driver/health_rules.cpp
 			driver/pose_list.cpp
 			driver/tracking_control.cpp
@@ -302,6 +303,13 @@ if (WIVRN_BUILD_SERVER)
 	endif()
 
 	install(TARGETS wivrn-server)
+
+	if (WIVRN_USE_NVML)
+		target_compile_definitions(wivrn-server PRIVATE WIVRN_USE_NVML=1)
+		if (NOT WIN32)
+			target_link_libraries(wivrn-server PRIVATE ${CMAKE_DL_LIBS})
+		endif()
+	endif()
 
 	if (WIVRN_BUILD_TEST)
 		# Stream health rules (GRID #2834): the pure rules the server runs, replayed over recorded sessions.

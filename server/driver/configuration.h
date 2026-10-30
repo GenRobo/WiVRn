@@ -63,6 +63,16 @@ struct configuration
 	std::optional<uint8_t> bit_depth;
 	// Minimum application pacing margin in milliseconds, see docs/configuration.md
 	std::optional<float> app_margin_ms;
+
+	// Stream health monitor (GRID #2834), see docs/health.md
+	struct health_options
+	{
+		bool warnings = true;
+		bool log = true;
+		bool app_data = true;
+		std::optional<std::filesystem::path> log_dir;
+		std::map<std::string, float> thresholds;
+	} health;
 	std::optional<std::array<float, 3>> grip_surface;
 	std::vector<std::string> application;
 	std::vector<app_data_sink> app_data;

@@ -59,6 +59,7 @@ if(WIVRN_BUILD_TEST)
 endif()
 
 option(WIVRN_USE_NVENC "Enable nvenc (Nvidia) hardware encoder" ON)
+option(WIVRN_USE_NVML "Stream health monitor reads NVENC utilisation through NVML, loaded at runtime" ON)
 option(WIVRN_USE_VAAPI "Enable vaapi (AMD/Intel) hardware encoder" ON)
 option(WIVRN_USE_VULKAN_ENCODE "Enable vulkan video encoder" ON)
 option(WIVRN_USE_X264 "Enable x264 software encoder" ON)

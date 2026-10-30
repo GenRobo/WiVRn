@@ -20,6 +20,8 @@
 
 #include "util/u_pacing.h"
 
+#include <atomic>
+#include <cstdint>
 #include <mutex>
 #include <vector>
 
@@ -45,6 +47,23 @@ public:
 	void destroy();
 
 	int64_t get_frame_time();
+
+	/// Counters for the stream health monitor (GRID #2834), reset by each call: frames the
+	/// applications delivered since the last call, how many were delivered after the compositor
+	/// deadline, and the slowest application's smoothed CPU and GPU time in nanoseconds.
+	struct health_counters
+	{
+		uint32_t apps;
+		uint32_t delivered;
+		uint32_t late;
+		int64_t cpu_ns;
+		int64_t gpu_ns;
+	};
+	health_counters take_health_counters();
+
+private:
+	std::atomic<uint32_t> delivered_count{0};
+	std::atomic<uint32_t> late_count{0};
 };
 
 } // namespace wivrn

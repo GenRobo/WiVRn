@@ -137,6 +137,20 @@ such as WebXR in a browser, may need 3 to pace smoothly at 120 Hz.
 }
 ```
 
+## `health`
+Default value: all on
+
+Stream health monitor: in-headset warnings and a per-second flight record. See
+[health.md](health.md) for the keys (`warnings`, `log`, `app-data`, `log-dir`, `thresholds`),
+the rules and the record format.
+
+### Example
+```json
+{
+	"health": { "warnings": true, "log": true, "thresholds": { "link_loss.frames_per_s": 8 } }
+}
+```
+
 ## `tcp-only`
 Default value: `false`
 
