@@ -627,6 +627,66 @@ void scenes::stream::gui_toasts()
 	ImGui::Text("%s", (*toast)->content.c_str());
 }
 
+void scenes::stream::draw_warning(XrTime predicted_display_time)
+{
+	constexpr XrDuration warning_visible_ns = 10'000'000'000;
+	auto warning = gui_warning.lock();
+	if (not warning->has_value())
+		return;
+	if (predicted_display_time - (*warning)->since > warning_visible_ns)
+	{
+		warning->reset();
+		return;
+	}
+	// The fourth viewport (view space, see stream.cpp): 1800x200 at (1800, 1000) in the swapchain.
+	const auto & vp = imgui_ctx->layers()[3];
+	ImGui::SetNextWindowPos(vp.vp_center(), ImGuiCond_Always, ImVec2(0.5f, 0.5f));
+	ImGui::SetNextWindowSizeConstraints(ImVec2(0, 0), ImVec2(float(vp.vp_size.x), float(vp.vp_size.y)));
+	ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4{0.18f, 0.12f, 0.02f, 0.92f});
+	ImGui::PushStyleColor(ImGuiCol_Border, ImVec4{0.95f, 0.65f, 0.10f, 1.0f});
+	ImGui::PushStyleColor(ImGuiCol_Text, ImVec4{1.0f, 0.92f, 0.75f, 1.0f});
+	ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 4);
+	ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, {24, 16});
+	ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 12);
+	ImGui::Begin("Stream health warning", nullptr, ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoInputs);
+	ImGui::PushTextWrapPos(float(vp.vp_size.x) - 48);
+	ImGui::TextUnformatted((*warning)->content.c_str());
+	ImGui::PopTextWrapPos();
+	ImGui::End();
+	ImGui::PopStyleVar(3);
+	ImGui::PopStyleColor(3);
+}
+
+// Rule order of health::rule_id on the server (docs/health.md).
+static constexpr std::array<const char *, 9> health_rule_names{"link_loss", "link_slow", "encoder_busy", "app_slow", "app_late", "headset_decode", "headset_thermal", "headset_battery", "refresh_mismatch"};
+
+void scenes::stream::gui_health_row()
+{
+	auto h = *last_health.lock();
+	if (not h)
+		return;
+	auto fmt = [](float v, const char * unit) { return v < 0 ? std::string("--") : std::format("{:.1f}{}", v, unit); };
+	std::string warnings;
+	for (size_t i = 0; i < health_rule_names.size(); ++i)
+		if (h->warnings & (1u << i))
+			warnings += (warnings.empty() ? "" : ", ") + std::string(health_rule_names[i]);
+	ImGui::TextWrapped("%s",
+	                   std::format("{}: app {} fps ({}% late) · encoder {} ({}) · link send {} spread {} lost {}/s · decode {} jitter {} · motion-to-photon {}",
+	                               warnings.empty() ? std::string(_S("Stream health OK")) : std::string(_S("Stream health: ")) + warnings,
+	                               fmt(h->app.hz, ""),
+	                               fmt(h->app.late_pct, ""),
+	                               fmt(h->encoder.encode_ms_p95, " ms"),
+	                               h->encoder.util_pct < 0 ? std::string("--") : std::format("{}%", h->encoder.util_pct),
+	                               fmt(h->link.send_ms_p95, " ms"),
+	                               fmt(h->link.receive_spread_ms_p95, " ms"),
+	                               h->link.frames_incomplete < 0 ? std::to_string(h->link.idr_lost_ref) : std::to_string(h->link.frames_incomplete),
+	                               fmt(h->headset.decode_ms_p95, " ms"),
+	                               fmt(h->headset.display_jitter_ms_p95, " ms"),
+	                               fmt(h->motion_to_photon_ms_p95, " ms"))
+	                           .c_str());
+	ImGui::Dummy(ImVec2(0, 10));
+}
+
 void scenes::stream::draw_gui(XrTime predicted_display_time, XrDuration predicted_display_period)
 {
 	if (auto new_status = next_gui_status.load(); new_status != gui_status)
@@ -718,6 +778,18 @@ void scenes::stream::draw_gui(XrTime predicted_display_time, XrDuration predicte
 		if (alpha == 0)
 		{
 			toast->reset();
+			// Nothing else to draw, but a stream-health warning has its own view-locked layer.
+			if (gui_warning.lock()->has_value())
+			{
+				imgui_ctx->new_frame(predicted_display_time);
+				draw_warning(predicted_display_time);
+				for (auto [_, layer]: imgui_ctx->end_frame())
+				{
+					add_quad_layer(layer.layerFlags, layer.space, layer.eyeVisibility, layer.subImage, layer.pose, layer.size);
+					if (composition_layer_depth_test_supported)
+						set_depth_test(true, XR_COMPARE_OP_LESS_FB);
+				}
+			}
 			return;
 		}
 	}
@@ -872,6 +944,7 @@ void scenes::stream::draw_gui(XrTime predicted_display_time, XrDuration predicte
 			ImGui::BeginChild("Main", ImVec2(ImGui::GetWindowSize().x - ImGui::GetCursorPosX() - content_margin, 0));
 			ImGui::SetCursorPosY(20);
 			wivrn::ui::page_header(_S("Statistics"), _S("Live streaming performance."));
+			gui_health_row();
 			ImGui::BeginChild("plots", {0, 0});
 			gui_performance_metrics();
 			ImGui::EndChild();
@@ -1050,6 +1123,7 @@ void scenes::stream::draw_gui(XrTime predicted_display_time, XrDuration predicte
 	ImGui::PopStyleVar(2);  // ImGuiStyleVar_ChildBorderSize, ImGuiStyleVar_WindowPadding
 	ImGui::PopStyleColor(); // ImGuiCol_WindowBg
 
+	draw_warning(predicted_display_time);
 	auto layers = imgui_ctx->end_frame();
 
 	// Display controllers and handle recentering

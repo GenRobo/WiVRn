@@ -35,6 +35,8 @@ int failures = 0;
 			std::cerr << __FILE__ << ":" << __LINE__ << ": FAIL " #cond << std::endl; \
 			++failures;                                                               \
 		}                                                                             \
+	} while (0)
+
 template <typename Packets, typename T>
 T round_trip(const T & value)
 {
@@ -70,7 +72,11 @@ int main()
 	        .link_mbps = 1000,
 	};
 	auto t2 = round_trip<from_headset::packets>(t);
-	CHECK(std::memcmp(&t, &t2, sizeof(t)) == 0);
+	CHECK(t2.frames_received == 600 and t2.frames_incomplete == 7 and t2.frames_decoded == 593);
+	CHECK(t2.frames_dropped_before_display == 2 and t2.frames_repeated == 3);
+	CHECK(t2.decode_ms_p95_x10 == 41 and t2.gpu_ms_x10 == 23 and t2.cpu_ms_x10 == 12 and t2.display_hz_active_x10 == 1200);
+	CHECK(t2.thermal_status == 2 and t2.cpu_level == 3 and t2.gpu_level == 4 and t2.network_kind == 3);
+	CHECK(t2.rssi_dbm == -61 and t2.link_mbps == 1000);
 
 	to_headset::health h{};
 	h.link.idr_lost_ref = 8;

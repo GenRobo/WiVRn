@@ -530,6 +530,16 @@ void scenes::stream::on_focused()
 	                .vp_origin = {1800, 0},
 	                .vp_size = {1800, 1000},
 	        },
+	        {
+	                // Stream health warning (GRID #2834): locked to the view, so it has no tracking swim and
+	                // stays readable when video frames are lost. Fixed pose below the centre of the view.
+	                .space = xr::spaces::view,
+	                .position = {0, -0.35, -1},
+	                .orientation = {1, 0, 0, 0},
+	                .size = {1.2, 0.1333},
+	                .vp_origin = {1800, 1000},
+	                .vp_size = {1800, 200},
+	        },
 	};
 
 	imgui_ctx.emplace(physical_device,
@@ -574,11 +584,13 @@ void scenes::stream::on_focused()
 	{
 		session.set_performance_level(XR_PERF_SETTINGS_DOMAIN_CPU_EXT, XR_PERF_SETTINGS_LEVEL_SUSTAINED_HIGH_EXT);
 		session.set_performance_level(XR_PERF_SETTINGS_DOMAIN_GPU_EXT, XR_PERF_SETTINGS_LEVEL_SUSTAINED_HIGH_EXT);
+		perf_level_cpu = perf_level_gpu = uint8_t(XR_PERF_SETTINGS_LEVEL_SUSTAINED_HIGH_EXT);
 	}
 	else
 	{
 		session.set_performance_level(XR_PERF_SETTINGS_DOMAIN_CPU_EXT, XR_PERF_SETTINGS_LEVEL_SUSTAINED_LOW_EXT);
 		session.set_performance_level(XR_PERF_SETTINGS_DOMAIN_GPU_EXT, XR_PERF_SETTINGS_LEVEL_SUSTAINED_LOW_EXT);
+		perf_level_cpu = perf_level_gpu = uint8_t(XR_PERF_SETTINGS_LEVEL_SUSTAINED_LOW_EXT);
 	}
 }
 
@@ -625,6 +637,9 @@ void scenes::stream::push_blit_handle(shard_accumulator * decoder, std::shared_p
 			if (decoder != decoders[stream].decoder.get())
 				return;
 			handle->feedback.received_from_decoder = instance.now();
+			health_counters.decoded.fetch_add(1, std::memory_order_relaxed);
+			if (handle->feedback.sent_to_decoder)
+				observe_decode_ms(float(handle->feedback.received_from_decoder - handle->feedback.sent_to_decoder) * 1e-6f);
 			std::swap(handle, decoders[stream].latest_frames[handle->feedback.frame_index % decoders[stream].latest_frames.size()]);
 		}
 
@@ -637,6 +652,8 @@ void scenes::stream::push_blit_handle(shard_accumulator * decoder, std::shared_p
 
 	if (handle and not handle->feedback.blitted)
 	{
+		// Decoded but superseded before it was ever blitted.
+		health_counters.dropped.fetch_add(1, std::memory_order_relaxed);
 		send_feedback(handle->feedback);
 	}
 }
@@ -934,6 +951,8 @@ void scenes::stream::render(const XrFrameState & frame_state)
 		if (blit_handle->feedback.blitted - blit_handle->feedback.received_from_decoder > 1'000'000'000)
 			set_state(state::stalled);
 		++blit_handle->feedback.times_displayed;
+		if (blit_handle->feedback.times_displayed > 1)
+			health_counters.repeated.fetch_add(1, std::memory_order_relaxed);
 		blit_handle->feedback.displayed = frame_state.predictedDisplayTime;
 
 		use_alpha = blit_handle->view_info.alpha;
@@ -1183,6 +1202,12 @@ void scenes::stream::render(const XrFrameState & frame_state)
 				spdlog::warn("Exception while sending feedback packet: {}", e.what());
 			}
 		}
+	}
+
+	if (frame_state.predictedDisplayTime >= next_telemetry)
+	{
+		next_telemetry = frame_state.predictedDisplayTime + telemetry_interval;
+		send_telemetry(frame_state.predictedDisplayTime);
 	}
 
 	read_actions();

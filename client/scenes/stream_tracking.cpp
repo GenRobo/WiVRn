@@ -19,6 +19,9 @@
 
 #include "application.h"
 #include "stream.h"
+#ifdef __ANDROID__
+#include "android/device_status.h"
+#endif
 #include "utils/overloaded.h"
 #include "wivrn_packets.h"
 #include "xr/body_tracker.h"
@@ -545,6 +548,13 @@ void scenes::stream::tracking()
 				});
 
 				next_battery_check = now + battery_check_interval;
+
+				// Stream health telemetry (GRID #2834): the same cadence, the same JNI-capable thread.
+				device_thermal_status = get_thermal_status();
+				auto net = get_network_status();
+				device_network_kind = net.kind;
+				device_rssi_dbm = net.rssi_dbm;
+				device_link_mbps = net.link_mbps;
 			}
 #endif
 

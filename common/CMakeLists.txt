@@ -60,7 +60,7 @@ if (WIVRN_BUILD_TEST AND (WIVRN_BUILD_SERVER OR WIVRN_BUILD_CLIENT))
     # WIVRN_PROTOCOL_VERSION_BEFORE_HEALTH is the protocol version of app-data ccb34516.
     add_executable(wivrn-packets-test tests/packets.cpp)
     target_link_libraries(wivrn-packets-test wivrn-common xrt-external-openxr)
-    target_compile_definitions(wivrn-packets-test PRIVATE WIVRN_PROTOCOL_VERSION_BEFORE_HEALTH=0x753bc12b975ba542ull)
+    target_compile_definitions(wivrn-packets-test PRIVATE WIVRN_PROTOCOL_VERSION_BEFORE_HEALTH=0x753bc12b975ba542ull WIVRN_HEALTH_PACKETS=1)
     add_test(NAME health_packets COMMAND wivrn-packets-test)
     set_tests_properties(health_packets PROPERTIES SKIP_RETURN_CODE 77)
 endif()
