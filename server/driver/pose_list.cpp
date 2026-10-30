@@ -26,6 +26,7 @@
 #include "math/m_vec3.h"
 #include "os/os_time.h"
 #include "xrt/xrt_defines.h"
+#include "utils/wivrn_trace.h"
 #include <Eigen/Core>
 #include <Eigen/Geometry>
 #include <iostream>
@@ -162,6 +163,8 @@ void pose_list::add_sample(XrTime production_timestamp, XrTime timestamp, const 
 {
 	production_timestamp = offset.from_headset(production_timestamp);
 	timestamp = offset.from_headset(timestamp);
+	if (device == device_id::HEAD)
+		trace::head_pose_sample(production_timestamp, timestamp, uint64_t(pose.flags));
 
 	// TODO keep the tracked flag
 
@@ -295,6 +298,11 @@ std::pair<XrTime, xrt_space_relation> pose_list::get_at(XrTime at_timestamp_ns)
 			};
 		}
 	}
+
+	if (device == device_id::HEAD)
+		trace::head_pose_evaluation(at_timestamp_ns, position.timestamp, orientation.timestamp,
+		                           position.production_timestamp, orientation.production_timestamp,
+		                           ret.relation_flags);
 
 	if (dumper)
 	{

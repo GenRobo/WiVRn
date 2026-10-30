@@ -59,6 +59,51 @@ void set_calibration_source(::vk_bundle * monado_vk);
 // name is copied at emit time (perfetto::DynamicString), so it need not outlive the call.
 void instant_feedback(const char * name, int64_t time_ns, uint64_t frame, uint8_t stream = -1);
 
+// app_id is a process-unique app-pacer lifetime ID; zero denotes the compositor.
+// Targets/wakes/timestamps are host monotonic ns; period_ns is a duration.
+void frame_prediction(uint64_t app_id, int64_t frame_id, int64_t when_host_ns,
+                      int64_t wake_host_ns, int64_t target_host_ns, int64_t period_ns);
+
+enum class app_stage
+{
+	wake,
+	begin,
+	submit_begin,
+	submit_end,
+	delivered,
+	gpu_done,
+	discarded,
+	latched,
+	retired,
+};
+// Only latched carries an exact system/compositor/video frame association.
+// Only delivered carries display_target_host_ns; absent fields are 0 / -1.
+void app_frame(app_stage stage, uint64_t app_id, int64_t frame_id, int64_t when_host_ns,
+               int64_t display_target_host_ns = 0, int64_t system_frame_id = -1);
+
+// Head samples are headset times converted to host monotonic ns using clock sync.
+// Emit at host receipt time; sample_target_host_ns may already be predicted.
+void head_pose_sample(int64_t production_host_ns, int64_t sample_target_host_ns, uint64_t pose_flags);
+// Query-to-frame association is by target time only, not an exact frame ID.
+// Position production is polynomial-fit provenance, not an exact source sample.
+// Effective target preserves the outer query clamp; evaluation may clamp again.
+void head_pose_query(bool view_query, int64_t when_host_ns, int64_t requested_target_host_ns,
+                     int64_t effective_target_host_ns, int64_t position_production_host_ns,
+                     uint64_t relation_flags);
+
+// Polynomial result targets include the inner extrapolation clamp or sample
+// fallback. Missing timestamps retain the interpolator's INT64_MIN sentinel.
+void head_pose_evaluation(int64_t requested_target_host_ns, int64_t position_target_host_ns,
+                          int64_t orientation_target_host_ns, int64_t position_production_host_ns,
+                          int64_t orientation_production_host_ns, uint64_t relation_flags);
+
+// Emit at host feedback receipt time, even before clock sync is valid.
+// times_displayed counts client selection/reuse, NOT measured presentation.
+// Targets are OpenXR predictedDisplayTime, NOT scanout. Host target is zero
+// when absent or clock-invalid; the headset-domain ns target remains available.
+void feedback_summary(uint64_t frame_id, uint8_t stream, uint8_t times_displayed, bool clock_valid,
+                      int64_t predicted_display_headset_ns, int64_t predicted_display_host_ns);
+
 // GPU-hardware-timestamped slice on the WiVRn encoder track.
 // begin_ns/end_ns must come from GPU query pools (gpu_timestamp_pool::collect),
 // already converted to host monotonic via calibrated timestamps.

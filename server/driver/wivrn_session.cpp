@@ -818,6 +818,10 @@ void wivrn_session::operator()(from_headset::timesync_response && timesync)
 void wivrn_session::operator()(from_headset::feedback && feedback)
 {
 	clock_offset o = offset_est.get_offset();
+	if (trace::is_enabled())
+		trace::feedback_summary(feedback.frame_index, feedback.stream_index, feedback.times_displayed,
+		                        bool(o), feedback.displayed,
+		                        o and feedback.displayed ? o.from_headset(feedback.displayed) : 0);
 	if (not o)
 		return;
 	compositor.on_feedback(feedback, o);
@@ -833,7 +837,7 @@ void wivrn_session::operator()(from_headset::feedback && feedback)
 	if (feedback.blitted)
 		trace::instant_feedback("blit", o.from_headset(feedback.blitted), feedback.frame_index, feedback.stream_index);
 	if (feedback.displayed)
-		trace::instant_feedback("display", o.from_headset(feedback.displayed), feedback.frame_index, feedback.stream_index);
+		trace::instant_feedback("predicted_display_target", o.from_headset(feedback.displayed), feedback.frame_index, feedback.stream_index);
 }
 
 void wivrn_session::operator()(from_headset::battery && battery)

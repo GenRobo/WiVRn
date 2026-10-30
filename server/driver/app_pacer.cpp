@@ -22,7 +22,9 @@
 #include "util/u_time.h"
 #include "util/u_var.h"
 #include "utils/method.h"
+#include "utils/wivrn_trace.h"
 #include <algorithm>
+#include <atomic>
 #include <cassert>
 #include <cmath>
 #include <ranges>
@@ -33,9 +35,14 @@ DEBUG_GET_ONCE_FLOAT_OPTION(min_margin_ms, "U_PACING_APP_MIN_MARGIN_MS", 1.5f)
 namespace wivrn
 {
 
+// Frame IDs are local to each app pacer; never reuse the trace identity when an
+// app exits and another pacer is allocated at the same address.
+static std::atomic<uint64_t> next_trace_app_id{1};
+
 class app_pacer : public u_pacing_app
 {
 	pacing_app_factory & parent;
+	const uint64_t trace_app_id = next_trace_app_id.fetch_add(1, std::memory_order_relaxed);
 	int64_t frame_id = 0;
 	int64_t compositor_display_time = 0;
 	int64_t last_display_time = 0;
@@ -104,8 +111,8 @@ public:
 	void mark_discarded(int64_t frame_id, int64_t when_ns);
 	void mark_delivered(int64_t frame_id, int64_t when_ns, int64_t display_time_ns);
 	void mark_gpu_done(int64_t frame_id, int64_t when_ns);
-	void latched(int64_t frame_id, int64_t when_ns, int64_t system_frame_id) {}
-	void retired(int64_t frame_id, int64_t when_ns) {}
+	void latched(int64_t frame_id, int64_t when_ns, int64_t system_frame_id);
+	void retired(int64_t frame_id, int64_t when_ns);
 	void info(int64_t predicted_display_time_ns,
 	          int64_t predicted_display_period_ns,
 	          int64_t extra_ns);
@@ -158,6 +165,8 @@ void app_pacer::predict(int64_t now_ns,
 		*out_predicted_display_period = period;
 		*out_wake_up_time = last_display_time - (cpu_time + gpu_time + compositor_time + int64_t(U_TIME_1MS_IN_NS * min_margin_ms.val));
 	}
+	trace::frame_prediction(trace_app_id, frame_id, now_ns, *out_wake_up_time,
+	                        *out_predicted_display_time, *out_predicted_display_period);
 }
 
 void app_pacer::mark_point(int64_t frame_id, enum u_timing_point point, int64_t when_ns)
@@ -169,16 +178,23 @@ void app_pacer::mark_point(int64_t frame_id, enum u_timing_point point, int64_t 
 	{
 		case U_TIMING_POINT_WAKE_UP:
 			frame.wake_up = when_ns;
+			trace::app_frame(trace::app_stage::wake, trace_app_id, frame_id, when_ns);
 			break;
 		case U_TIMING_POINT_BEGIN:
+			trace::app_frame(trace::app_stage::begin, trace_app_id, frame_id, when_ns);
+			break;
 		case U_TIMING_POINT_SUBMIT_BEGIN:
+			trace::app_frame(trace::app_stage::submit_begin, trace_app_id, frame_id, when_ns);
+			break;
 		case U_TIMING_POINT_SUBMIT_END:
+			trace::app_frame(trace::app_stage::submit_end, trace_app_id, frame_id, when_ns);
 			break;
 	}
 }
 
 void app_pacer::mark_delivered(int64_t frame_id, int64_t when_ns, int64_t display_time_ns)
 {
+	trace::app_frame(trace::app_stage::delivered, trace_app_id, frame_id, when_ns, display_time_ns);
 	auto & frame = get_frame(frame_id);
 	if (frame.frame_id != frame_id)
 		return;
@@ -187,10 +203,21 @@ void app_pacer::mark_delivered(int64_t frame_id, int64_t when_ns, int64_t displa
 
 void app_pacer::mark_discarded(int64_t frame_id, int64_t when_ns)
 {
+	trace::app_frame(trace::app_stage::discarded, trace_app_id, frame_id, when_ns);
 	auto & frame = get_frame(frame_id);
 	if (frame.frame_id != frame_id)
 		return;
 	frame.delivered = when_ns;
+}
+
+void app_pacer::latched(int64_t frame_id, int64_t when_ns, int64_t system_frame_id)
+{
+	trace::app_frame(trace::app_stage::latched, trace_app_id, frame_id, when_ns, 0, system_frame_id);
+}
+
+void app_pacer::retired(int64_t frame_id, int64_t when_ns)
+{
+	trace::app_frame(trace::app_stage::retired, trace_app_id, frame_id, when_ns);
 }
 
 void app_pacer::info(int64_t predicted_display_time_ns,
@@ -211,6 +238,7 @@ int64_t lerp0(int64_t a, int64_t b, double t)
 
 void app_pacer::mark_gpu_done(int64_t frame_id, int64_t when_ns)
 {
+	trace::app_frame(trace::app_stage::gpu_done, trace_app_id, frame_id, when_ns);
 	auto & frame = get_frame(frame_id);
 	if (frame.frame_id != frame_id or not(frame.wake_up and frame.delivered))
 		return;

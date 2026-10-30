@@ -22,6 +22,7 @@
 #include "driver/clock_offset.h"
 
 #include "util/u_var.h"
+#include "utils/wivrn_trace.h"
 #include <algorithm>
 #include <cmath>
 
@@ -45,28 +46,32 @@ pacer::pacer(uint64_t frame_duration) :
                 .max = 20,
         },
         frame_times(5000),
-        frame_times_compute(frame_times),
         worker([this](std::stop_token t) {
 	        std::vector<XrDuration> samples;
+	        samples.reserve(frame_times.size());
 	        while (not t.stop_requested())
 	        {
+		        std::unique_lock lock(mutex);
+		        compute_cv.wait(lock, [&] { return compute_pending or t.stop_requested(); });
+		        if (t.stop_requested())
+			        break;
+		        compute_pending = false;
+		        auto generation = history_generation;
 		        samples.clear();
+		        for (const auto & time: frame_times)
 		        {
-			        std::unique_lock lock(compute_mutex);
-			        compute_cv.wait(lock);
-			        for (const auto & time: frame_times_compute)
-			        {
-				        if (time.decoded > time.present)
-					        samples.push_back(time.decoded - time.present);
-			        }
+			        if (time.decoded > time.present)
+				        samples.push_back(time.decoded - time.present);
 		        }
 		        if (samples.empty())
 			        continue;
+		        lock.unlock();
 		        auto it = samples.begin() + (samples.size() * 995) / 1000;
 		        std::ranges::nth_element(samples, it);
 
-		        std::unique_lock lock(mutex);
-		        safe_present_to_decoded_ns = *it + client_margin_ms.val * U_TIME_1MS_IN_NS;
+		        lock.lock();
+		        if (generation == history_generation)
+			        safe_present_to_decoded_ns = *it + client_margin_ms.val * U_TIME_1MS_IN_NS;
 	        }
         })
 {
@@ -77,8 +82,11 @@ pacer::pacer(uint64_t frame_duration) :
 pacer::~pacer()
 {
 	u_var_remove_root(this);
-	worker.request_stop();
-	compute_cv.notify_all();
+	{
+		std::lock_guard lock(mutex);
+		worker.request_stop();
+	}
+	compute_cv.notify_one();
 }
 
 uint64_t pacer::get_frame_duration() const
@@ -123,6 +131,8 @@ void pacer::predict(
 	};
 
 	out_present_slop_ns = slop_ns;
+	trace::frame_prediction(0, frame_id, now, out_wake_up_time_ns,
+	                        out_predicted_display_time_ns, frame_duration_ns);
 }
 
 void pacer::on_feedback(const wivrn::from_headset::feedback & feedback, const clock_offset & offset)
@@ -148,9 +158,10 @@ void pacer::on_feedback(const wivrn::from_headset::feedback & feedback, const cl
 	{
 		if (feedback.frame_index % 100 == 0)
 		{
-			std::unique_lock lock(compute_mutex);
-			std::swap(frame_times, frame_times_compute);
-			compute_cv.notify_all();
+			// Keep one continuous history; swapping histories makes successive
+			// percentile estimates alternate between disjoint sets of frames.
+			compute_pending = true;
+			compute_cv.notify_one();
 		}
 		// adjust phase
 		auto d = (frame_duration_ns / 2 + offset.from_headset(feedback.blitted) - last_ns) % frame_duration_ns;
@@ -209,5 +220,7 @@ void pacer::reset()
 {
 	std::lock_guard lock(mutex);
 	std::ranges::fill(frame_times, frame_time{});
+	++history_generation;
+	compute_pending = false;
 }
 } // namespace wivrn

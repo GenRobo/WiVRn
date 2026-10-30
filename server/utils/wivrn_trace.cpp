@@ -25,7 +25,9 @@
 #include "os/os_time.h"
 #include "util/u_debug.h"
 #include "util/u_logging.h"
+#ifndef _WIN32
 #include "utils/xdg_base_directory.h"
+#endif
 
 #include <cstdint>
 #include <cstdlib>
@@ -35,7 +37,11 @@
 #include <memory>
 #include <perfetto.h>
 #include <string>
+#ifdef _WIN32
+#include <process.h>
+#else
 #include <unistd.h>
+#endif
 #include <vector>
 
 PERFETTO_DEFINE_CATEGORIES(
@@ -99,10 +105,40 @@ tracing_mode parse_tracing_mode()
 	return tracing_mode::off;
 }
 
+#ifndef _WIN32
 // Default socket is root-only; use a per-user XDG_RUNTIME_DIR path so a user-launched traced can bind.
 std::string default_producer_sock_path()
 {
 	return (xdg_runtime_dir() / "wivrn-perfetto-producer.sock").string();
+}
+#endif
+
+int process_id()
+{
+#ifdef _WIN32
+	return _getpid();
+#else
+	return getpid();
+#endif
+}
+
+// Callers supply os_monotonic_get_ns() values, not the SDK's default BOOTTIME
+// clock. Declare their domain explicitly so Perfetto can use its clock snapshots.
+perfetto::TraceTimestamp host_timestamp(int64_t time_ns)
+{
+#ifdef _WIN32
+	// Monado scales QPC by an integer ns/tick. Perfetto instead uses QPC/frequency;
+	// these agree for the usual 10 MHz clock, but not for every QPC frequency.
+	static const double scale = [] {
+		LARGE_INTEGER frequency;
+		QueryPerformanceFrequency(&frequency);
+		return 1e9 / (static_cast<double>(frequency.QuadPart) * os_ns_per_qpc_tick_get());
+	}();
+	const uint64_t value = scale == 1.0 ? static_cast<uint64_t>(time_ns) : static_cast<uint64_t>(time_ns * scale);
+#else
+	const uint64_t value = static_cast<uint64_t>(time_ns);
+#endif
+	return {perfetto::protos::pbzero::BUILTIN_CLOCK_MONOTONIC, value};
 }
 
 // Local-time stamp for trace filenames, evaluated per flush.
@@ -110,7 +146,11 @@ std::string now_timestamp()
 {
 	const std::time_t now = std::time(nullptr);
 	std::tm tm{};
+#ifdef _WIN32
+	localtime_s(&tm, &now);
+#else
 	localtime_r(&now, &tm);
+#endif
 	char buf[16];
 	std::strftime(buf, sizeof(buf), "%Y%m%d-%H%M%S", &tm);
 	return buf;
@@ -119,7 +159,7 @@ std::string now_timestamp()
 std::string expand_file_placeholders(std::string s)
 {
 	const std::string ts = now_timestamp();
-	const std::string pid = std::to_string(getpid());
+	const std::string pid = std::to_string(process_id());
 	for (size_t pos = 0; (pos = s.find('%', pos)) != std::string::npos;)
 	{
 		if (pos + 1 >= s.size())
@@ -146,7 +186,7 @@ std::string resolve_inproc_file_path()
 {
 	const char * file = std::getenv("WIVRN_TRACING_FILE");
 	if (!file or !*file)
-		return "wivrn-" + now_timestamp() + "-" + std::to_string(getpid()) + ".pftrace";
+		return "wivrn-" + now_timestamp() + "-" + std::to_string(process_id()) + ".pftrace";
 	return expand_file_placeholders(file);
 }
 
@@ -184,7 +224,11 @@ void write_inproc_session()
 	if (out)
 	{
 		out.write(data.data(), static_cast<std::streamsize>(data.size()));
-		U_LOG_I("wivrn::trace: wrote %zu bytes to %s", data.size(), path.string().c_str());
+		out.close();
+		if (out)
+			U_LOG_I("wivrn::trace: wrote %zu bytes to %s", data.size(), path.string().c_str());
+		else
+			U_LOG_E("wivrn::trace: failed to write %s", path.string().c_str());
 	}
 	else
 		U_LOG_E("wivrn::trace: failed to open %s for writing", path.string().c_str());
@@ -243,7 +287,7 @@ perfetto::Track & cpu_track_obj(cpu_track d)
 // setenv(..., 0) preserves an explicit user-set XRT_TRACING. No-op without WIVRN_TRACE_MONADO.
 static void propagate_to_monado()
 {
-#ifdef WIVRN_TRACE_MONADO
+#if defined(WIVRN_TRACE_MONADO) && !defined(_WIN32)
 	const tracing_mode mode = parse_tracing_mode();
 	if (mode == tracing_mode::system or mode == tracing_mode::both)
 		setenv("XRT_TRACING", "true", 0);
@@ -267,18 +311,29 @@ void init()
 		U_LOG_D("wivrn::trace: WIVRN_TRACING not set, perfetto tracing disabled");
 		return;
 	}
-	enabled = true;
 
-	const bool use_system = mode == tracing_mode::system or mode == tracing_mode::both;
+	bool use_system = mode == tracing_mode::system or mode == tracing_mode::both;
 	const bool use_inprocess = mode == tracing_mode::inprocess or mode == tracing_mode::both;
+#ifdef _WIN32
+	if (use_system)
+	{
+		U_LOG_W("wivrn::trace: system backend is unsupported on Windows; use WIVRN_TRACING=inprocess");
+		use_system = false;
+	}
+#endif
+	if (!use_system and !use_inprocess)
+		return;
+	enabled = true;
 
 	perfetto::TracingInitArgs args;
 	if (use_system)
 	{
+#ifndef _WIN32
 		const auto sock = default_producer_sock_path();
 		if (setenv("PERFETTO_PRODUCER_SOCK_NAME", sock.c_str(), 0) == 0)
 			U_LOG_I("wivrn::trace: producer socket %s", std::getenv("PERFETTO_PRODUCER_SOCK_NAME"));
 		args.backends |= perfetto::kSystemBackend;
+#endif
 	}
 	if (use_inprocess)
 		args.backends |= perfetto::kInProcessBackend;
@@ -315,10 +370,14 @@ void flush_session()
 
 void shutdown()
 {
-	if (!initialized or !g_inproc_session)
+	if (!initialized)
 		return;
-	write_inproc_session();
-	g_inproc_session.reset();
+	if (g_inproc_session)
+	{
+		write_inproc_session();
+		g_inproc_session.reset();
+	}
+	enabled = false;
 }
 
 bool is_enabled()
@@ -338,27 +397,109 @@ void set_calibration_source(::vk_bundle * monado_vk)
 
 void instant_feedback(const char * name, int64_t time_ns, uint64_t frame, uint8_t stream)
 {
-	if (!initialized)
+	if (!enabled)
 		return;
-	TRACE_EVENT_INSTANT("wivrn_feedback", perfetto::DynamicString(name), g_feedback_track, static_cast<uint64_t>(time_ns), "frame", frame, "stream", static_cast<uint32_t>(stream));
+	TRACE_EVENT_INSTANT("wivrn_feedback", perfetto::DynamicString(name), g_feedback_track, host_timestamp(time_ns), "frame", frame, "stream", static_cast<uint32_t>(stream));
+}
+
+void frame_prediction(uint64_t app_id, int64_t frame_id, int64_t when_host_ns,
+                      int64_t wake_host_ns, int64_t target_host_ns, int64_t period_ns)
+{
+	if (!enabled or !TRACE_EVENT_CATEGORY_ENABLED("wivrn_compositor"))
+		return;
+	TRACE_EVENT_INSTANT("wivrn_compositor", perfetto::DynamicString(app_id ? "app_prediction" : "compositor_prediction"),
+	                   g_compositor_track, host_timestamp(when_host_ns),
+	                   "app_id", app_id, "frame", frame_id, "wake_host_ns", wake_host_ns,
+	                   "target_host_ns", target_host_ns, "period_ns", period_ns);
+}
+
+void app_frame(app_stage stage, uint64_t app_id, int64_t frame_id, int64_t when_host_ns,
+               int64_t display_target_host_ns, int64_t system_frame_id)
+{
+	if (!enabled or !TRACE_EVENT_CATEGORY_ENABLED("wivrn_compositor"))
+		return;
+	const char * name = nullptr;
+	switch (stage)
+	{
+		case app_stage::wake: name = "app_wake"; break;
+		case app_stage::begin: name = "app_begin"; break;
+		case app_stage::submit_begin: name = "app_submit_begin"; break;
+		case app_stage::submit_end: name = "app_submit_end"; break;
+		case app_stage::delivered: name = "app_delivered"; break;
+		case app_stage::gpu_done: name = "app_gpu_done"; break;
+		case app_stage::discarded: name = "app_discarded"; break;
+		case app_stage::latched: name = "app_latched"; break;
+		case app_stage::retired: name = "app_retired"; break;
+	}
+	TRACE_EVENT_INSTANT("wivrn_compositor", perfetto::DynamicString(name),
+	                   g_compositor_track, host_timestamp(when_host_ns),
+	                   "app_id", app_id, "frame", frame_id, "system_frame", system_frame_id,
+	                   "display_target_host_ns", display_target_host_ns);
+}
+
+void head_pose_sample(int64_t production_host_ns, int64_t sample_target_host_ns, uint64_t pose_flags)
+{
+	if (!enabled or !TRACE_EVENT_CATEGORY_ENABLED("wivrn_compositor"))
+		return;
+	TRACE_EVENT_INSTANT("wivrn_compositor", "head_pose_sample", g_compositor_track,
+	                   host_timestamp(os_monotonic_get_ns()),
+	                   "production_host_ns", production_host_ns, "sample_target_host_ns", sample_target_host_ns,
+	                   "pose_flags", pose_flags);
+}
+
+void head_pose_query(bool view_query, int64_t when_host_ns, int64_t requested_target_host_ns,
+                     int64_t effective_target_host_ns, int64_t position_production_host_ns, uint64_t relation_flags)
+{
+	if (!enabled or !TRACE_EVENT_CATEGORY_ENABLED("wivrn_compositor"))
+		return;
+	TRACE_EVENT_INSTANT("wivrn_compositor", "head_pose_query", g_compositor_track, host_timestamp(when_host_ns),
+	                   "view_query", view_query, "requested_target_host_ns", requested_target_host_ns,
+	                   "effective_target_host_ns", effective_target_host_ns,
+	                   "position_production_host_ns", position_production_host_ns, "relation_flags", relation_flags);
+}
+
+void head_pose_evaluation(int64_t requested_target_host_ns, int64_t position_target_host_ns,
+                          int64_t orientation_target_host_ns, int64_t position_production_host_ns,
+                          int64_t orientation_production_host_ns, uint64_t relation_flags)
+{
+	if (!enabled or !TRACE_EVENT_CATEGORY_ENABLED("wivrn_compositor"))
+		return;
+	TRACE_EVENT_INSTANT("wivrn_compositor", "head_pose_evaluation", g_compositor_track,
+	                   host_timestamp(os_monotonic_get_ns()), "requested_target_host_ns", requested_target_host_ns,
+	                   "position_target_host_ns", position_target_host_ns,
+	                   "orientation_target_host_ns", orientation_target_host_ns,
+	                   "position_production_host_ns", position_production_host_ns,
+	                   "orientation_production_host_ns", orientation_production_host_ns, "relation_flags", relation_flags);
+}
+
+void feedback_summary(uint64_t frame_id, uint8_t stream, uint8_t times_displayed, bool clock_valid,
+                      int64_t predicted_display_headset_ns, int64_t predicted_display_host_ns)
+{
+	if (!enabled or !TRACE_EVENT_CATEGORY_ENABLED("wivrn_feedback"))
+		return;
+	TRACE_EVENT_INSTANT("wivrn_feedback", "feedback_summary", g_feedback_track,
+	                   host_timestamp(os_monotonic_get_ns()), "frame", frame_id, "stream", static_cast<uint32_t>(stream),
+	                   "selection_count", static_cast<uint32_t>(times_displayed), "clock_valid", clock_valid,
+	                   "predicted_display_headset_ns", predicted_display_headset_ns,
+	                   "predicted_display_host_ns", predicted_display_host_ns);
 }
 
 void gpu_slice(gpu_track, const char * slice_name, int64_t begin_ns, int64_t end_ns, uint64_t frame, uint8_t stream)
 {
-	if (!initialized)
+	if (!enabled)
 		return;
 	// gpu_track is unused today (all slices share the encoder track); kept for future GPU lanes.
-	TRACE_EVENT_BEGIN("wivrn_encoder_gpu", perfetto::DynamicString(slice_name), g_encoder_track, static_cast<uint64_t>(begin_ns), "frame", frame, "stream", static_cast<uint32_t>(stream));
-	TRACE_EVENT_END("wivrn_encoder_gpu", g_encoder_track, static_cast<uint64_t>(end_ns));
+	TRACE_EVENT_BEGIN("wivrn_encoder_gpu", perfetto::DynamicString(slice_name), g_encoder_track, host_timestamp(begin_ns), "frame", frame, "stream", static_cast<uint32_t>(stream));
+	TRACE_EVENT_END("wivrn_encoder_gpu", g_encoder_track, host_timestamp(end_ns));
 }
 
 #define WIVRN_CPU_BEGIN(CAT, trk, name, ts, frame, stream) \
-	TRACE_EVENT_BEGIN(CAT, perfetto::DynamicString(name), (trk), static_cast<uint64_t>(ts), "frame", (frame), "stream", static_cast<uint32_t>(stream))
+	TRACE_EVENT_BEGIN(CAT, perfetto::DynamicString(name), (trk), host_timestamp(ts), "frame", (frame), "stream", static_cast<uint32_t>(stream))
 
 scope::scope(cpu_track which, uint8_t stream, uint64_t frame, const char * name) :
         which(which), stream(stream), frame(frame), name(name), begin_ns(0), active(false)
 {
-	if (!initialized)
+	if (!wivrn::trace::enabled)
 		return;
 	bool enabled = false;
 	switch (which)
@@ -389,42 +530,42 @@ scope::~scope()
 	{
 		case cpu_track::encoder:
 			WIVRN_CPU_BEGIN("wivrn_encoder", trk, name, begin_ns, frame, stream);
-			TRACE_EVENT_END("wivrn_encoder", trk, static_cast<uint64_t>(end_ns));
+			TRACE_EVENT_END("wivrn_encoder", trk, host_timestamp(end_ns));
 			break;
 		case cpu_track::compositor:
 			WIVRN_CPU_BEGIN("wivrn_compositor", trk, name, begin_ns, frame, stream);
-			TRACE_EVENT_END("wivrn_compositor", trk, static_cast<uint64_t>(end_ns));
+			TRACE_EVENT_END("wivrn_compositor", trk, host_timestamp(end_ns));
 			break;
 		case cpu_track::network:
 			WIVRN_CPU_BEGIN("wivrn_network", trk, name, begin_ns, frame, stream);
-			TRACE_EVENT_END("wivrn_network", trk, static_cast<uint64_t>(end_ns));
+			TRACE_EVENT_END("wivrn_network", trk, host_timestamp(end_ns));
 			break;
 	}
 }
 
 void cpu_instant(cpu_track which, const char * name, uint64_t frame, uint8_t stream)
 {
-	if (!initialized)
+	if (!enabled)
 		return;
 	const int64_t ts = os_monotonic_get_ns();
 	perfetto::Track & trk = cpu_track_obj(which);
 	switch (which)
 	{
 		case cpu_track::encoder:
-			TRACE_EVENT_INSTANT("wivrn_encoder", perfetto::DynamicString(name), trk, static_cast<uint64_t>(ts), "frame", frame, "stream", static_cast<uint32_t>(stream));
+			TRACE_EVENT_INSTANT("wivrn_encoder", perfetto::DynamicString(name), trk, host_timestamp(ts), "frame", frame, "stream", static_cast<uint32_t>(stream));
 			break;
 		case cpu_track::compositor:
-			TRACE_EVENT_INSTANT("wivrn_compositor", perfetto::DynamicString(name), trk, static_cast<uint64_t>(ts), "frame", frame, "stream", static_cast<uint32_t>(stream));
+			TRACE_EVENT_INSTANT("wivrn_compositor", perfetto::DynamicString(name), trk, host_timestamp(ts), "frame", frame, "stream", static_cast<uint32_t>(stream));
 			break;
 		case cpu_track::network:
-			TRACE_EVENT_INSTANT("wivrn_network", perfetto::DynamicString(name), trk, static_cast<uint64_t>(ts), "frame", frame, "stream", static_cast<uint32_t>(stream));
+			TRACE_EVENT_INSTANT("wivrn_network", perfetto::DynamicString(name), trk, host_timestamp(ts), "frame", frame, "stream", static_cast<uint32_t>(stream));
 			break;
 	}
 }
 
 void cpu_begin(cpu_track which, uint8_t stream, uint64_t frame, const char * name)
 {
-	if (!initialized)
+	if (!enabled)
 		return;
 	const int64_t ts = os_monotonic_get_ns();
 	perfetto::Track & trk = cpu_track_obj(which);
@@ -444,20 +585,20 @@ void cpu_begin(cpu_track which, uint8_t stream, uint64_t frame, const char * nam
 
 void cpu_end(cpu_track which, uint8_t, uint64_t, const char *)
 {
-	if (!initialized)
+	if (!enabled)
 		return;
 	const int64_t ts = os_monotonic_get_ns();
 	perfetto::Track & trk = cpu_track_obj(which);
 	switch (which)
 	{
 		case cpu_track::encoder:
-			TRACE_EVENT_END("wivrn_encoder", trk, static_cast<uint64_t>(ts));
+			TRACE_EVENT_END("wivrn_encoder", trk, host_timestamp(ts));
 			break;
 		case cpu_track::compositor:
-			TRACE_EVENT_END("wivrn_compositor", trk, static_cast<uint64_t>(ts));
+			TRACE_EVENT_END("wivrn_compositor", trk, host_timestamp(ts));
 			break;
 		case cpu_track::network:
-			TRACE_EVENT_END("wivrn_network", trk, static_cast<uint64_t>(ts));
+			TRACE_EVENT_END("wivrn_network", trk, host_timestamp(ts));
 			break;
 	}
 }
@@ -483,6 +624,12 @@ void set_calibration_source(::vk_bundle *) {}
 	return nullptr;
 }
 void instant_feedback(const char *, int64_t, uint64_t, uint8_t) {}
+void frame_prediction(uint64_t, int64_t, int64_t, int64_t, int64_t, int64_t) {}
+void app_frame(app_stage, uint64_t, int64_t, int64_t, int64_t, int64_t) {}
+void head_pose_sample(int64_t, int64_t, uint64_t) {}
+void head_pose_query(bool, int64_t, int64_t, int64_t, int64_t, uint64_t) {}
+void head_pose_evaluation(int64_t, int64_t, int64_t, int64_t, int64_t, uint64_t) {}
+void feedback_summary(uint64_t, uint8_t, uint8_t, bool, int64_t, int64_t) {}
 void gpu_slice(gpu_track, const char *, int64_t, int64_t, uint64_t, uint8_t) {}
 scope::scope(cpu_track which, uint8_t stream, uint64_t frame, const char * name) :
         which(which), stream(stream), frame(frame), name(name), begin_ns(0), active(false) {}

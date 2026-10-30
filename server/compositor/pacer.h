@@ -67,9 +67,9 @@ private:
 	};
 	std::vector<frame_time> frame_times;
 
-	std::mutex compute_mutex;
+	bool compute_pending = false;
+	uint64_t history_generation = 0;
 	std::condition_variable compute_cv;
-	std::vector<frame_time> frame_times_compute;
 	std::jthread worker;
 
 	std::array<frame_info, 8> in_flight_frames;

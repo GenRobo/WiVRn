@@ -208,13 +208,22 @@ if (WIVRN_BUILD_SERVER)
 			NAMES perfetto.h
 			PATHS /usr/share/perfetto/sdk
 			DOC "Perfetto amalgamated SDK directory")
-		if(NOT PERFETTO_SDK_DIR)
-			message(FATAL_ERROR "WIVRN_USE_PERFETTO=ON but Perfetto SDK (perfetto.h) not found. Install perfetto-sdk.")
+		if(NOT PERFETTO_SDK_DIR OR NOT EXISTS "${PERFETTO_SDK_DIR}/perfetto.h" OR NOT EXISTS "${PERFETTO_SDK_DIR}/perfetto.cc")
+			message(FATAL_ERROR "WIVRN_USE_PERFETTO=ON requires matching perfetto.h and perfetto.cc; set PERFETTO_SDK_DIR to the extracted amalgamated SDK directory.")
 		endif()
-		add_library(wivrn-perfetto-sdk STATIC ${PERFETTO_SDK_DIR}/perfetto.cc)
-		target_include_directories(wivrn-perfetto-sdk PUBLIC ${PERFETTO_SDK_DIR})
-		target_compile_options(wivrn-perfetto-sdk PRIVATE -w)
-		target_link_libraries(wivrn-perfetto-sdk PUBLIC pthread dl)
+		add_library(wivrn-perfetto-sdk STATIC "${PERFETTO_SDK_DIR}/perfetto.cc")
+		target_include_directories(wivrn-perfetto-sdk PUBLIC "${PERFETTO_SDK_DIR}")
+		if(MSVC)
+			target_compile_options(wivrn-perfetto-sdk PRIVATE /w /bigobj)
+		else()
+			target_compile_options(wivrn-perfetto-sdk PRIVATE -w)
+		endif()
+		find_package(Threads REQUIRED)
+		target_link_libraries(wivrn-perfetto-sdk PUBLIC Threads::Threads ${CMAKE_DL_LIBS})
+		if(WIN32)
+			target_compile_definitions(wivrn-perfetto-sdk PUBLIC WIN32_LEAN_AND_MEAN NOMINMAX)
+			target_link_libraries(wivrn-perfetto-sdk PUBLIC ws2_32)
+		endif()
 		target_link_libraries(wivrn-server PRIVATE wivrn-perfetto-sdk)
 		target_compile_definitions(wivrn-server PRIVATE WIVRN_USE_PERFETTO)
 		if(WIVRN_TRACE_MONADO)
@@ -301,6 +310,21 @@ if (WIVRN_BUILD_SERVER)
 	endif()
 
 	install(TARGETS wivrn-server)
+
+	add_executable(wivrn-pacer-test EXCLUDE_FROM_ALL
+		tests/pacer.cpp
+		compositor/pacer.cpp
+		driver/clock_offset.cpp
+		utils/wivrn_trace.cpp
+	)
+	target_compile_features(wivrn-pacer-test PRIVATE cxx_std_20)
+	target_include_directories(wivrn-pacer-test PRIVATE .)
+	target_include_directories(wivrn-pacer-test SYSTEM PRIVATE ${monado_SOURCE_DIR}/src/xrt/compositor/)
+	target_link_libraries(wivrn-pacer-test PRIVATE
+		aux_os aux_util aux_vk
+		wivrn-common wivrn-external
+		xrt-external-openxr xrt-interfaces Eigen3::Eigen
+	)
 endif()
 
 if (WIVRN_BUILD_SERVER_LIBRARY)

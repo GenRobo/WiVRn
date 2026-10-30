@@ -29,6 +29,7 @@
 #include "util/u_device_id.h"
 #include "util/u_logging.h"
 #include "utils/method.h"
+#include "utils/wivrn_trace.h"
 
 #include "xrt_cast.h"
 #include <cstdint>
@@ -158,6 +159,7 @@ xrt_result_t wivrn_hmd::get_tracked_pose(xrt_input_name name, int64_t at_timesta
 	auto target_ns = std::min(now + max_extrapolation_ns, at_timestamp_ns);
 	auto [production_timestamp, view] = views.get_at(target_ns);
 	*res = view.relation;
+	trace::head_pose_query(false, now, at_timestamp_ns, target_ns, production_timestamp, res->relation_flags);
 	cnx->add_tracking_request(device_id::HEAD, at_timestamp_ns, production_timestamp, now);
 	return XRT_SUCCESS;
 }
@@ -202,6 +204,7 @@ xrt_result_t wivrn_hmd::get_view_poses(const xrt_vec3 * default_eye_relation,
 
 	view.relation.relation_flags = (xrt_space_relation_flags)flags;
 	*out_head_relation = view.relation;
+	trace::head_pose_query(true, now, at_timestamp_ns, target_ns, production_timestamp, out_head_relation->relation_flags);
 
 	assert((out_head_relation->relation_flags & XRT_SPACE_RELATION_ORIENTATION_VALID_BIT) == 0 or math_quat_ensure_normalized(&out_head_relation->pose.orientation));
 
