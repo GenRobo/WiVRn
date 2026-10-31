@@ -251,6 +251,7 @@ public:
 	void operator()(to_headset::application_icon &&);
 	void operator()(to_headset::running_applications &&);
 	void operator()(to_headset::app_data &&);
+	void operator()(to_headset::health &&);
 	void operator()(audio_data &&);
 
 	void push_blit_handle(wivrn::shard_accumulator * decoder, std::shared_ptr<wivrn::shard_accumulator::blit_handle> handle);
@@ -359,5 +360,36 @@ private:
 	void gui_applications();
 	void gui_toasts();
 	void draw_gui(XrTime predicted_display_time, XrDuration predicted_display_period);
+
+	// Stream health (GRID #2834). Counters are bumped where each event happens (relaxed
+	// atomics); send_telemetry drains them once per second.
+	struct health_counters
+	{
+		std::atomic<uint32_t> incomplete{0};
+		std::atomic<uint32_t> decoded{0};
+		std::atomic<uint32_t> dropped{0};
+		std::atomic<uint32_t> repeated{0};
+		std::array<std::atomic<uint16_t>, 32> decode_hist{};
+	} health_counters;
+	XrTime next_telemetry = 0;
+	static constexpr XrDuration telemetry_interval = 1'000'000'000;
+	uint8_t perf_level_cpu = 255;
+	uint8_t perf_level_gpu = 255;
+	// Read on the tracking thread (which has a JNI environment), sent from the render thread.
+	std::atomic<uint8_t> device_thermal_status{255};
+	std::atomic<uint8_t> device_network_kind{0};
+	std::atomic<int16_t> device_rssi_dbm{INT16_MIN};
+	std::atomic<uint32_t> device_link_mbps{0};
+	void observe_decode_ms(float ms);
+	void send_telemetry(XrTime now);
+	thread_safe<std::optional<to_headset::health>> last_health;
+	struct gui_warning_t
+	{
+		std::string content;
+		XrTime since;
+	};
+	thread_safe<std::optional<gui_warning_t>> gui_warning;
+	void draw_warning(XrTime predicted_display_time);
+	void gui_health_row();
 };
 } // namespace scenes

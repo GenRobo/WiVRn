@@ -1,2 +1,25 @@
 # Patches and patches/apply.sh are used byte for byte, also on Windows checkouts with core.autocrlf
 patches/** -text
+
+# Files the Android/Linux toolchains execute or parse must stay LF on every checkout, so a
+# Windows checkout can be copied to a Linux build tree as-is (tools/windows/build-apk-wsl.sh).
+*.sh text eol=lf
+gradlew text eol=lf
+*.gradle text eol=lf
+*.properties text eol=lf
+*.cmake text eol=lf
+CMakeLists.txt text eol=lf
+*.py text eol=lf
+*.glsl text eol=lf
+*.vert text eol=lf
+*.frag text eol=lf
+*.comp text eol=lf
+
+# Binary assets: never translate line endings.
+*.glb binary
+*.ktx2 binary
+*.png binary
+*.jpg binary
+*.ttf binary
+*.otf binary
+*.apk binary

@@ -703,6 +703,26 @@ struct app_data
 	std::vector<uint8_t> data;
 };
 
+// Stream health (GRID #2834): once per second while streaming.
+struct telemetry
+{
+	uint32_t frames_received;               // complete + incomplete
+	uint32_t frames_incomplete;             // shards missing, never decoded
+	uint32_t frames_decoded;
+	uint32_t frames_dropped_before_display; // decoded, superseded before being blitted
+	uint32_t frames_repeated;               // extra displays of an already shown frame
+	uint16_t decode_ms_p95_x10;
+	uint16_t gpu_ms_x10;
+	uint16_t cpu_ms_x10;
+	uint16_t display_hz_active_x10;
+	uint8_t thermal_status; // Android PowerManager.getCurrentThermalStatus() 0..6, 255 unknown
+	uint8_t cpu_level;      // XrPerfSettingsLevelEXT requested by the app, 255 unknown
+	uint8_t gpu_level;
+	uint8_t network_kind;   // 0 unknown, 1 wifi, 2 usb-ethernet, 3 ethernet, 4 usb
+	int16_t rssi_dbm;       // wifi only, else INT16_MIN
+	uint32_t link_mbps;     // reported link speed, 0 unknown
+};
+
 // when changing this, also make sure there are handlers in wivrn_session, etc. or compilation will fail
 using packets = std::variant<
         crypto_handshake,
@@ -735,7 +755,8 @@ using packets = std::variant<
         set_active_application,
         hid::input,
         stop_application,
-        app_data>;
+        app_data,
+        telemetry>;
 } // namespace from_headset
 
 namespace to_headset
@@ -782,6 +803,9 @@ struct server_message
 
 		// displayed in lobby after disconnect (buffered)
 		error,
+
+		// in-stream stream-health warning (GRID #2834): amber, view-locked, not buffered
+		warning,
 	};
 
 	kind kind;
@@ -955,6 +979,48 @@ struct app_data
 	std::vector<uint8_t> data;
 };
 
+// Stream health (GRID #2834): the server's last per-second sample, for the statistics tab.
+struct health_link
+{
+	uint32_t idr_lost_ref;
+	int32_t frames_incomplete;
+	float send_ms_p95;
+	float receive_spread_ms_p95;
+};
+struct health_encoder
+{
+	uint32_t presented;
+	uint32_t skipped;
+	float encode_ms_p95;
+	int32_t util_pct;
+};
+struct health_app
+{
+	float hz;
+	float late_pct;
+	float cpu_ms;
+	float gpu_ms;
+};
+struct health_headset
+{
+	float decode_ms_p95;
+	float display_jitter_ms_p95;
+	float display_hz;
+	float requested_hz;
+	int32_t thermal_status;
+	int32_t battery_pct;
+};
+struct health
+{
+	int64_t t_unix_s;
+	health_link link;
+	health_encoder encoder;
+	health_app app;
+	health_headset headset;
+	float motion_to_photon_ms_p95;
+	uint16_t warnings; // bit i set: rule i of health::rule_id is active
+};
+
 using packets = std::variant<
         crypto_handshake,
         pin_check_2,
@@ -974,7 +1040,8 @@ using packets = std::variant<
         application_list,
         application_icon,
         running_applications,
-        app_data>;
+        app_data,
+        health>;
 } // namespace to_headset
 } // namespace wivrn
 

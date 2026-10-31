@@ -55,6 +55,12 @@ public:
 	/// and "session_resumed". Recorded as event lines in the flight record.
 	void on_session_event(std::string_view event);
 
+	/// The headset's once-per-second telemetry (milestone 3): fills the headset-side fields.
+	void on_telemetry(const from_headset::telemetry &);
+
+	/// Sends the last sample to the headset for its statistics tab; set by the session.
+	std::function<void(const to_headset::health &)> send_health;
+
 	/// A line received on the telemetry connector (milestone 4): warnings and metrics from
 	/// applications. Invalid lines are counted and ignored.
 	void on_connector_line(std::string_view line);
@@ -110,6 +116,8 @@ private:
 	uint32_t invalid_connector_lines = 0;
 	std::map<std::string, double> connector_metrics;
 	std::atomic<bool> paused{false};
+	std::optional<from_headset::telemetry> last_telemetry; // under mutex
+	bool telemetry_fresh = false;                          // set by on_telemetry, cleared by collect
 	void write_line(const std::string &);
 
 	std::jthread thread;

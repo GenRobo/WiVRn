@@ -147,15 +147,17 @@ wivrn::wivrn_session::wivrn_session(std::unique_ptr<wivrn_connection> connection
 	        conf.health,
 	        health_monitor::default_log_dir(),
 	        [this](const std::string & message, bool urgent) {
+		        // Warnings get their own view-locked amber layer on the headset; recovery is a quiet toast.
 		        send_control(to_headset::server_message{
-		                .kind = urgent ? to_headset::server_message::kind::toast_urgent : to_headset::server_message::kind::toast,
+		                .kind = urgent ? to_headset::server_message::kind::warning : to_headset::server_message::kind::toast,
 		                .msg = message,
 		        });
 	        },
 	        [this](health::sample & s) {
 		        s.headset.requested_hz = default_fps();
 		        float active = active_refresh_hz.load();
-		        s.headset.display_hz = active > 0 ? active : s.headset.requested_hz;
+		        if (s.headset.display_hz <= 0) // the headset's telemetry wins when present
+			        s.headset.display_hz = active > 0 ? active : s.headset.requested_hz;
 		        health->set_display_hz(s.headset.display_hz);
 		        auto battery = *last_battery.lock();
 		        if (battery.present)
@@ -170,6 +172,7 @@ wivrn::wivrn_session::wivrn_session(std::unique_ptr<wivrn_connection> connection
 		        s.app.cpu_ms = app.cpu_ns > 0 ? float(app.cpu_ns) * 1e-6f : -1;
 		        s.app.gpu_ms = app.gpu_ns > 0 ? float(app.gpu_ns) * 1e-6f : -1;
 	        });
+	health->send_health = [this](const to_headset::health & h) { send_control(to_headset::health{h}); };
 
 #if WIVRN_FEATURE_STEAMVR_LIGHTHOUSE
 
@@ -876,6 +879,12 @@ void wivrn_session::operator()(from_headset::battery && battery)
 {
 	hmd.update_battery(battery);
 	*last_battery.lock() = battery;
+}
+
+void wivrn_session::operator()(from_headset::telemetry && telemetry)
+{
+	if (health)
+		health->on_telemetry(telemetry);
 }
 
 void wivrn_session::operator()(from_headset::visibility_mask_changed && mask)

@@ -8,6 +8,21 @@ Frame handling is unchanged: the monitor reads counters the encoder, the IDR han
 application pacer already keep, and the per-frame feedback the headset already sends. One
 thread wakes once per second to do the arithmetic.
 
+The headset sends `from_headset::telemetry` once per second while streaming: frames received,
+incomplete, decoded, dropped before display and repeated; decode time p95; its own CPU and GPU
+time; the active refresh rate; the Android thermal status; the requested performance levels;
+and the active network (kind, Wi-Fi RSSI, link speed). The server merges it into the sample,
+so the headset's own counts are authoritative where it has them. The server answers with
+`to_headset::health`, the last sample, which the headset's Statistics tab shows as its first row.
+Both packets change the protocol version: a headset app without them is refused at the lobby
+with the usual *incompatible* message.
+
+Warnings reach the headset as `server_message::kind::warning`, drawn by the headset app on its
+own composition layer in the VIEW reference space (locked to the view, so it does not swim with
+tracking latency and stays readable while video frames are lost). The amber panel sits below the
+centre of the view for 10 s. Servers from milestone 2 sent `toast_urgent` instead; the client
+still shows those as before.
+
 ## Configuration
 
 ```json

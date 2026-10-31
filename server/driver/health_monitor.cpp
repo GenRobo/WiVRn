@@ -224,6 +224,13 @@ void health_monitor::set_display_hz(float hz)
 	fb.period_ns.store(hz > 0 ? int64_t(1e9 / hz) : 0, std::memory_order_relaxed);
 }
 
+void health_monitor::on_telemetry(const from_headset::telemetry & t)
+{
+	std::lock_guard lock(mutex);
+	last_telemetry = t;
+	telemetry_fresh = true;
+}
+
 void health_monitor::on_session_event(std::string_view event)
 {
 	paused = event == "session_paused";
@@ -307,8 +314,24 @@ health::sample health_monitor::collect(int64_t now_unix_s)
 		s.headset.display_jitter_ms_p95 = fb.display_jitter.total() ? float(fb.display_jitter.percentile(0.95)) : -1;
 		s.motion_to_photon_ms_p95 = fb.motion_to_photon.total() ? float(fb.motion_to_photon.percentile(0.95)) : -1;
 		s.headset.frames_repeated = fb.repeated;
-		// frames_incomplete stays -1 until the headset reports it (milestone 3): the server only
-		// sees the frames the headset acknowledged, complete or not.
+		// The headset's own counts (milestone 3) are authoritative when fresh this second; the
+		// server's view of incomplete frames otherwise stays unknown, because the server only
+		// sees the frames the headset acknowledged.
+		if (last_telemetry and telemetry_fresh)
+		{
+			const auto & t = *last_telemetry;
+			s.link.frames_incomplete = int32_t(t.frames_incomplete);
+			s.headset.frames_repeated = t.frames_repeated;
+			if (t.frames_decoded)
+				s.headset.decode_ms_p95 = float(t.decode_ms_p95_x10) / 10.f;
+			s.headset.gpu_ms = float(t.gpu_ms_x10) / 10.f;
+			s.headset.cpu_ms = float(t.cpu_ms_x10) / 10.f;
+			if (t.thermal_status != 255)
+				s.headset.thermal_status = t.thermal_status;
+			if (t.display_hz_active_x10)
+				s.headset.display_hz = float(t.display_hz_active_x10) / 10.f;
+			telemetry_fresh = false;
+		}
 		fb.encode.clear();
 		fb.send.clear();
 		fb.spread.clear();
@@ -325,6 +348,25 @@ health::sample health_monitor::collect(int64_t now_unix_s)
 		fill(s);
 	return s;
 }
+
+namespace
+{
+to_headset::health to_packet(const health::sample & s, std::span<const health::rule_id> active)
+{
+	to_headset::health h{
+	        .t_unix_s = s.t_unix_s,
+	        .link = {s.link.idr_lost_ref, s.link.frames_incomplete, s.link.send_ms_p95, s.link.receive_spread_ms_p95},
+	        .encoder = {s.encoder.presented, s.encoder.skipped, s.encoder.encode_ms_p95, s.encoder.util_pct},
+	        .app = {s.app.hz, s.app.late_pct, s.app.cpu_ms, s.app.gpu_ms},
+	        .headset = {s.headset.decode_ms_p95, s.headset.display_jitter_ms_p95, s.headset.display_hz, s.headset.requested_hz, s.headset.thermal_status, s.headset.battery_pct},
+	        .motion_to_photon_ms_p95 = s.motion_to_photon_ms_p95,
+	        .warnings = 0,
+	};
+	for (auto id: active)
+		h.warnings |= uint16_t(1u << uint8_t(id));
+	return h;
+}
+} // namespace
 
 void health_monitor::write_event_dump(const health::rule_state::event & e, const health::sample & s)
 {
@@ -411,6 +453,8 @@ void health_monitor::run(std::stop_token stop)
 			last = s;
 		}
 		write_line(j.dump());
+		if (send_health and not is_paused)
+			send_health(to_packet(s, active));
 
 		for (const auto & e: events)
 		{

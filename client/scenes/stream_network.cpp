@@ -23,6 +23,8 @@
 #include "utils/i18n.h"
 #include "utils/named_thread.h"
 
+#include <algorithm>
+#include <cmath>
 #include <spdlog/spdlog.h>
 #include <uni_algo/case.h>
 
@@ -55,6 +57,10 @@ void scenes::stream::operator()(to_headset::server_message && message)
 			toast->emplace(message.msg, message.kind == to_headset::server_message::kind::toast_urgent);
 
 			gui_status_last_change = instance.now();
+			break;
+		}
+		case to_headset::server_message::kind::warning: {
+			gui_warning.lock()->emplace(message.msg, instance.now());
 			break;
 		}
 
@@ -144,6 +150,8 @@ void scenes::stream::operator()(audio_data && data)
 
 void scenes::stream::send_feedback(const wivrn::from_headset::feedback & feedback)
 {
+	if (not feedback.sent_to_decoder)
+		health_counters.incomplete.fetch_add(1, std::memory_order_relaxed);
 	try
 	{
 		network_session->send_control(wivrn::from_headset::feedback{feedback});
@@ -152,6 +160,77 @@ void scenes::stream::send_feedback(const wivrn::from_headset::feedback & feedbac
 	{
 		spdlog::warn("Exception while sending feedback packet: {}", e.what());
 	}
+}
+
+void scenes::stream::observe_decode_ms(float ms)
+{
+	// Same 32 logarithmic buckets as the server's health::log_histogram: 0.1 ms, growing 1.25x.
+	size_t bucket = 0;
+	if (ms >= 0.1f)
+		bucket = std::min<size_t>(31, size_t(1 + std::floor(std::log(ms / 0.1f) / std::log(1.25f))));
+	health_counters.decode_hist[bucket].fetch_add(1, std::memory_order_relaxed);
+}
+
+void scenes::stream::send_telemetry(XrTime now)
+{
+	uint32_t total = 0;
+	std::array<uint16_t, 32> hist;
+	for (size_t i = 0; i < hist.size(); ++i)
+	{
+		hist[i] = health_counters.decode_hist[i].exchange(0, std::memory_order_relaxed);
+		total += hist[i];
+	}
+	float decode_p95 = 0;
+	if (total)
+	{
+		uint32_t target = (total * 95 + 99) / 100, seen = 0;
+		for (size_t i = 0; i < hist.size(); ++i)
+		{
+			seen += hist[i];
+			if (seen >= target)
+			{
+				decode_p95 = i == 0 ? 0.f : 0.1f * std::pow(1.25f, float(i - 1));
+				break;
+			}
+		}
+	}
+	auto clamp16 = [](float v) { return uint16_t(std::clamp(v, 0.f, 65535.f)); };
+	from_headset::telemetry t{
+	        .frames_incomplete = health_counters.incomplete.exchange(0, std::memory_order_relaxed),
+	        .frames_decoded = health_counters.decoded.exchange(0, std::memory_order_relaxed),
+	        .frames_dropped_before_display = health_counters.dropped.exchange(0, std::memory_order_relaxed),
+	        .frames_repeated = health_counters.repeated.exchange(0, std::memory_order_relaxed),
+	        .decode_ms_p95_x10 = clamp16(decode_p95 * 10),
+	        .gpu_ms_x10 = clamp16(compact_gpu_time * 1e4f),
+	        .cpu_ms_x10 = clamp16(compact_cpu_time * 1e4f),
+	        .display_hz_active_x10 = 0,
+	        .thermal_status = 255,
+	        .cpu_level = perf_level_cpu,
+	        .gpu_level = perf_level_gpu,
+	        .network_kind = 0,
+	        .rssi_dbm = INT16_MIN,
+	        .link_mbps = 0,
+	};
+	t.frames_received = t.frames_incomplete + t.frames_decoded;
+	if (instance.has_extension(XR_FB_DISPLAY_REFRESH_RATE_EXTENSION_NAME))
+		t.display_hz_active_x10 = clamp16(session.get_current_refresh_rate() * 10);
+	t.thermal_status = device_thermal_status.load();
+	t.network_kind = device_network_kind.load();
+	t.rssi_dbm = device_rssi_dbm.load();
+	t.link_mbps = device_link_mbps.load();
+	try
+	{
+		network_session->send_control(std::move(t));
+	}
+	catch (std::exception & e)
+	{
+		spdlog::warn("Exception while sending telemetry: {}", e.what());
+	}
+}
+
+void scenes::stream::operator()(to_headset::health && h)
+{
+	*last_health.lock() = std::move(h);
 }
 
 void scenes::stream::operator()(to_headset::application_list && l)
