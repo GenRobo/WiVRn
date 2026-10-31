@@ -25,6 +25,20 @@ namespace wivrn
 {
 idr_handler::~idr_handler() = default;
 
+namespace
+{
+std::atomic<uint32_t> lost_reference_count{0}, dropped_idr_count{0}, timeout_count{0};
+} // namespace
+
+idr_handler::request_counts idr_handler::take_request_counts()
+{
+	return {
+	        .lost_reference = lost_reference_count.exchange(0, std::memory_order_relaxed),
+	        .dropped_idr = dropped_idr_count.exchange(0, std::memory_order_relaxed),
+	        .timeout = timeout_count.exchange(0, std::memory_order_relaxed),
+	};
+}
+
 void default_idr_handler::on_feedback(const from_headset::feedback & f)
 {
 	std::unique_lock lock(mutex);
@@ -42,6 +56,7 @@ void default_idr_handler::on_feedback(const from_headset::feedback & f)
 			                   else
 			                   {
 				                   U_LOG_W("IDR frame dropped, stream %d", f.stream_index);
+				                   dropped_idr_count.fetch_add(1, std::memory_order_relaxed);
 				                   state = need_idr{};
 			                   }
 		                   }
@@ -50,6 +65,7 @@ void default_idr_handler::on_feedback(const from_headset::feedback & f)
 		                   if (not f.sent_to_decoder and f.frame_index >= r.first_p and not is_non_ref_frame(f.frame_index))
 		                   {
 			                   U_LOG_I("IDR frame needed on stream %d", f.stream_index);
+			                   lost_reference_count.fetch_add(1, std::memory_order_relaxed);
 			                   state = need_idr{};
 		                   }
 	                   },
@@ -73,6 +89,7 @@ bool default_idr_handler::should_skip(uint64_t frame_id)
 		                          if (frame_id > w.idr_id + 100)
 		                          {
 			                          U_LOG_W("IDR frame timeout");
+			                          timeout_count.fetch_add(1, std::memory_order_relaxed);
 			                          state = need_idr{};
 			                          return false;
 		                          }

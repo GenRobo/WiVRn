@@ -142,6 +142,35 @@ wivrn::wivrn_session::wivrn_session(std::unique_ptr<wivrn_connection> connection
 
 	auto conf = configuration();
 
+	// Stream health monitor (GRID #2834): one per headset session, across pauses and resumes.
+	health = std::make_unique<health_monitor>(
+	        conf.health,
+	        health_monitor::default_log_dir(),
+	        [this](const std::string & message, bool urgent) {
+		        send_control(to_headset::server_message{
+		                .kind = urgent ? to_headset::server_message::kind::toast_urgent : to_headset::server_message::kind::toast,
+		                .msg = message,
+		        });
+	        },
+	        [this](health::sample & s) {
+		        s.headset.requested_hz = default_fps();
+		        float active = active_refresh_hz.load();
+		        s.headset.display_hz = active > 0 ? active : s.headset.requested_hz;
+		        health->set_display_hz(s.headset.display_hz);
+		        auto battery = *last_battery.lock();
+		        if (battery.present)
+		        {
+			        s.headset.battery_pct = int(std::lround(battery.charge * 100));
+			        s.headset.charging = battery.charging;
+		        }
+		        auto app = app_pacers.take_health_counters();
+		        // No OpenXR application connected: unknown, not slow.
+		        s.app.hz = app.apps ? float(app.delivered) : -1.f;
+		        s.app.late_pct = app.delivered ? 100.f * float(app.late) / float(app.delivered) : (app.apps ? 0.f : -1.f);
+		        s.app.cpu_ms = app.cpu_ns > 0 ? float(app.cpu_ns) * 1e-6f : -1;
+		        s.app.gpu_ms = app.gpu_ns > 0 ? float(app.gpu_ns) * 1e-6f : -1;
+	        });
+
 #if WIVRN_FEATURE_STEAMVR_LIGHTHOUSE
 
 	auto use_steamvr_lh = conf.use_steamvr_lh || std::getenv("WIVRN_USE_STEAMVR_LH");
@@ -429,6 +458,8 @@ void wivrn_session::pause_session()
 
 	// pause session components
 
+	if (health)
+		health->on_session_event("session_paused");
 	worker_thread = std::jthread();
 	offset_est.reset();
 
@@ -459,6 +490,9 @@ void wivrn_session::resume_session()
 	// Tell the headset whether forwarded input devices are mirrored to uinput. The headset picks
 	// what to forward. The OpenXR gamepad at /user/gamepad is always available regardless.
 	send_control(to_headset::feature_control{to_headset::feature_control::hid_input, bool(uinput_handler)});
+
+	if (health)
+		health->on_session_event("session_resumed");
 
 	{
 		float target_fps = default_fps();
@@ -821,6 +855,8 @@ void wivrn_session::operator()(from_headset::feedback && feedback)
 	if (not o)
 		return;
 	compositor.on_feedback(feedback, o);
+	if (health)
+		health->on_feedback(feedback);
 
 	if (feedback.received_first_packet)
 		trace::instant_feedback("receive_begin", o.from_headset(feedback.received_first_packet), feedback.frame_index, feedback.stream_index);
@@ -839,6 +875,7 @@ void wivrn_session::operator()(from_headset::feedback && feedback)
 void wivrn_session::operator()(from_headset::battery && battery)
 {
 	hmd.update_battery(battery);
+	*last_battery.lock() = battery;
 }
 
 void wivrn_session::operator()(from_headset::visibility_mask_changed && mask)
@@ -885,6 +922,7 @@ void wivrn_session::operator()(from_headset::user_presence_changed && event)
 void wivrn_session::operator()(from_headset::refresh_rate_changed && event)
 {
 	auto locked = settings.lock();
+	active_refresh_hz = event.to;
 	compositor.set_framerate(event.to / locked->fps_divider);
 	push_event(
 	        {

@@ -20,6 +20,7 @@
 
 #include "wivrn_packets.h"
 
+#include <atomic>
 #include <cstdint>
 #include <mutex>
 #include <variant>
@@ -34,6 +35,16 @@ public:
 	virtual void on_feedback(const from_headset::feedback &) = 0;
 	virtual void reset() = 0;
 	virtual bool should_skip(uint64_t frame_id) = 0;
+
+	/// Stream health (GRID #2834): requests made since the last call, by reason, summed over
+	/// all streams. Relaxed atomics, incremented where the requests are logged.
+	struct request_counts
+	{
+		uint32_t lost_reference;
+		uint32_t dropped_idr;
+		uint32_t timeout;
+	};
+	static request_counts take_request_counts();
 };
 
 // handler for unknown P-frames

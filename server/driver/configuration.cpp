@@ -237,6 +237,25 @@ configuration::configuration()
 				throw std::runtime_error("invalid app-margin-ms setting, supported range: 0.5 to 5");
 		}
 
+		if (auto it = json.find("health"); it != json.end() and it->is_object())
+		{
+			if (auto w = it->find("warnings"); w != it->end())
+				health.warnings = *w;
+			if (auto l = it->find("log"); l != it->end())
+				health.log = *l;
+			if (auto a = it->find("app-data"); a != it->end())
+				health.app_data = *a;
+			if (auto d = it->find("log-dir"); d != it->end())
+				health.log_dir = d->get<std::string>();
+			if (auto t = it->find("thresholds"); t != it->end() and t->is_object())
+				for (auto & [key, value]: t->items())
+				{
+					if (not value.is_number())
+						throw std::runtime_error("health.thresholds." + key + " must be a number");
+					health.thresholds[key] = value.get<float>();
+				}
+		}
+
 		if (auto it = json.find("tcp-only"); it != json.end())
 			tcp_only = *it;
 

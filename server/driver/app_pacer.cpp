@@ -54,6 +54,7 @@ class app_pacer : public u_pacing_app
 		int64_t frame_id;
 		int64_t wake_up;
 		int64_t delivered;
+		int64_t predicted_display;
 	};
 	std::array<frame, 16> frames{};
 
@@ -117,6 +118,12 @@ public:
 		return std::max(cpu_time, gpu_time);
 	}
 
+	std::pair<int64_t, int64_t> get_times()
+	{
+		std::lock_guard lock(mutex);
+		return {cpu_time, gpu_time};
+	}
+
 	void destroy()
 	{
 		parent.remove_app(this);
@@ -159,6 +166,7 @@ void app_pacer::predict(int64_t now_ns,
 		*out_predicted_display_period = period;
 		*out_wake_up_time = last_display_time - (cpu_time + gpu_time + compositor_time + int64_t(U_TIME_1MS_IN_NS * min_margin_ms.val));
 	}
+	get_frame(frame_id).predicted_display = *out_predicted_display_time;
 }
 
 void app_pacer::mark_point(int64_t frame_id, enum u_timing_point point, int64_t when_ns)
@@ -184,6 +192,10 @@ void app_pacer::mark_delivered(int64_t frame_id, int64_t when_ns, int64_t displa
 	if (frame.frame_id != frame_id)
 		return;
 	frame.delivered = when_ns;
+	// Health counters: one relaxed increment per frame; the monitor thread reads them once per second.
+	parent.delivered_count.fetch_add(1, std::memory_order_relaxed);
+	if (frame.predicted_display and when_ns > frame.predicted_display - compositor_time)
+		parent.late_count.fetch_add(1, std::memory_order_relaxed);
 }
 
 void app_pacer::mark_discarded(int64_t frame_id, int64_t when_ns)
@@ -253,6 +265,26 @@ int64_t pacing_app_factory::get_frame_time()
 	if (app_pacers.empty())
 		return 1;
 	return std::ranges::max(std::ranges::transform_view(app_pacers, [](auto * pacer) { return pacer->get_app_time(); }));
+}
+
+pacing_app_factory::health_counters pacing_app_factory::take_health_counters()
+{
+	health_counters c{
+	        .apps = 0,
+	        .delivered = delivered_count.exchange(0, std::memory_order_relaxed),
+	        .late = late_count.exchange(0, std::memory_order_relaxed),
+	        .cpu_ns = 0,
+	        .gpu_ns = 0,
+	};
+	std::lock_guard lock(mutex);
+	c.apps = uint32_t(app_pacers.size());
+	for (auto * pacer: app_pacers)
+	{
+		auto [cpu, gpu] = pacer->get_times();
+		c.cpu_ns = std::max(c.cpu_ns, cpu);
+		c.gpu_ns = std::max(c.gpu_ns, gpu);
+	}
+	return c;
 }
 
 } // namespace wivrn

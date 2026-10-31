@@ -60,6 +60,11 @@ struct stream_stats
 };
 stream_stats stats[3];
 std::atomic<int64_t> next_stats_log_ns = 0;
+// Health monitor view of the same counters; separate so the five-second log keeps its own windows.
+struct health_stats
+{
+	std::atomic<uint64_t> presented, skipped, bytes, shards;
+} health_totals;
 
 void maybe_log_stats()
 {
@@ -81,6 +86,16 @@ void maybe_log_stats()
 	}
 }
 } // namespace
+
+video_encoder::health_counters video_encoder::take_health_counters()
+{
+	return {
+	        .presented = health_totals.presented.exchange(0, std::memory_order_relaxed),
+	        .skipped = health_totals.skipped.exchange(0, std::memory_order_relaxed),
+	        .bytes = health_totals.bytes.exchange(0, std::memory_order_relaxed),
+	        .shards = health_totals.shards.exchange(0, std::memory_order_relaxed),
+	};
+}
 
 video_encoder::sender::sender() :
         thread([this](std::stop_token t) {
@@ -280,9 +295,11 @@ void video_encoder::present_image(vk::Image y_cbcr, vk::SemaphoreSubmitInfo info
 	present_slot = (present_slot + 1) % num_slots;
 	state[present_slot].wait(busy);
 	stats[stream_idx % 3].presented++;
+	health_totals.presented.fetch_add(1, std::memory_order_relaxed);
 	if (idr->should_skip(frame_index))
 	{
 		stats[stream_idx % 3].skipped++;
+		health_totals.skipped.fetch_add(1, std::memory_order_relaxed);
 		// The reference-tracking encoders (Vulkan Video) stop encoding until the headset acknowledges a
 		// frame (feedback.sent_to_decoder); make a stall visible instead of silent.
 		if (++consecutive_skips == 72)
@@ -368,6 +385,7 @@ void video_encoder::SendData(std::span<uint8_t> data, bool end_of_frame, bool co
 	if (video_dump)
 		video_dump.write((char *)data.data(), data.size());
 	stats[stream_idx % 3].bytes += data.size();
+	health_totals.bytes.fetch_add(data.size(), std::memory_order_relaxed);
 
 	ssize_t max_payload_size = (cnx->has_stream() and not control) ? to_headset::video_stream_data_shard::max_payload_size : std::numeric_limits<uint32_t>::max();
 
@@ -396,6 +414,7 @@ void video_encoder::SendData(std::span<uint8_t> data, bool end_of_frame, bool co
 		}
 		++shard.shard_idx;
 		stats[stream_idx % 3].shards++;
+		health_totals.shards.fetch_add(1, std::memory_order_relaxed);
 		shard.view_info.reset();
 		begin = next;
 	}
