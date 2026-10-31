@@ -61,6 +61,8 @@ struct configuration
 
 	std::array<encoder, 3> encoders; // left, right, alpha
 	std::optional<uint8_t> bit_depth;
+	// Minimum application pacing margin in milliseconds, see docs/configuration.md
+	std::optional<float> app_margin_ms;
 	std::optional<std::array<float, 3>> grip_surface;
 	std::vector<std::string> application;
 	std::vector<app_data_sink> app_data;

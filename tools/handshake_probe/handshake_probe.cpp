@@ -7,6 +7,9 @@
 // PROBE_APP_DATA_SEND=<file> replays the file on it in PROBE_APP_DATA_CHUNK byte packets (default 65536)
 // at PROBE_APP_DATA_RATE packets per second (default 50), repeatedly if PROBE_APP_DATA_REPEAT=1;
 // PROBE_APP_DATA_RECV=<file> records what the server relays on the channel.
+// Stream health (GRID #2834): PROBE_DROP_FRAMES_PER_S=<n> reports n frames per second per stream as
+// never decoded (feedback.sent_to_decoder = 0), like a headset that lost their shards;
+// PROBE_EXPECT_MESSAGE=<substring> makes the exit status 3 unless a server_message containing it arrives.
 #include "crypto.h"
 #include "protocol_version.h"
 #include "secrets.h"
@@ -167,7 +170,11 @@ int main(int argc, char ** argv)
 		auto next_tracking = std::chrono::steady_clock::now();
 		std::deque<std::pair<std::chrono::steady_clock::time_point, from_headset::feedback>> pending_acks;
 		const auto ack_delay = std::chrono::milliseconds(std::getenv("PROBE_ACK_DELAY_MS") ? std::stoi(std::getenv("PROBE_ACK_DELAY_MS")) : 0);
-		log("ack delay ", ack_delay.count(), " ms");
+		const int drop_per_s = std::getenv("PROBE_DROP_FRAMES_PER_S") ? std::stoi(std::getenv("PROBE_DROP_FRAMES_PER_S")) : 0;
+		const std::string expect_message = std::getenv("PROBE_EXPECT_MESSAGE") ? std::getenv("PROBE_EXPECT_MESSAGE") : "";
+		bool expected_seen = false;
+		std::array<uint64_t, 3> dropped{};
+		log("ack delay ", ack_delay.count(), " ms, dropping ", drop_per_s, " frames/s per stream", expect_message.empty() ? "" : ", expecting server_message containing '" + expect_message + "'");
 
 		auto env = [](const char * name) -> std::string { return std::getenv(name) ? std::getenv(name) : ""; };
 		const std::string app_data_channel = env("PROBE_APP_DATA_CHANNEL");
@@ -278,23 +285,31 @@ int main(int argc, char ** argv)
 								// otherwise the encoder's reference handler stops encoding (should_skip).
 								frames[s]++;
 								auto t = now_ns();
+								// Report every k-th frame as lost: the shards never reached the decoder.
+								bool lost = drop_per_s > 0 and frames[s] % std::max<uint64_t>(1, 120 / drop_per_s) == 0;
+								if (lost)
+									dropped[s]++;
 								pending_acks.push_back({std::chrono::steady_clock::now() + ack_delay, from_headset::feedback{
 								                                                                              .frame_index = pkt.frame_idx,
 								                                                                              .stream_index = pkt.stream_item_idx,
 								                                                                              .received_first_packet = t,
-								                                                                              .received_last_packet = t,
-								                                                                              .sent_to_decoder = t,
-								                                                                              .received_from_decoder = t,
-								                                                                              .blitted = t,
-								                                                                              .displayed = t,
-								                                                                              .times_displayed = 1,
+								                                                                              .received_last_packet = lost ? 0 : t,
+								                                                                              .sent_to_decoder = lost ? 0 : t,
+								                                                                              .received_from_decoder = lost ? 0 : t,
+								                                                                              .blitted = lost ? 0 : t,
+								                                                                              .displayed = lost ? 0 : t,
+								                                                                              .times_displayed = uint8_t(lost ? 0 : 1),
 								                                                                      }});
 							}
 						}
 						else if constexpr (std::is_same_v<T, to_headset::video_stream_description>)
 							log("video_stream_description ", pkt.width, "x", pkt.height, " @", pkt.frame_rate);
 						else if constexpr (std::is_same_v<T, to_headset::server_message>)
+						{
 							log("server_message: ", pkt.msg);
+							if (not expect_message.empty() and pkt.msg.find(expect_message) != std::string::npos)
+								expected_seen = true;
+						}
 						else if constexpr (std::is_same_v<T, to_headset::app_data>)
 						{
 							if (pkt.channel == app_data_channel)
@@ -324,10 +339,15 @@ int main(int argc, char ** argv)
 				std::string app_data_report;
 				if (not app_data_channel.empty())
 					app_data_report = " app_data sent=" + std::to_string(app_data_sent) + " received=" + std::to_string(app_data_received) + " (" + std::to_string(app_data_packets_received) + " packets)";
-				log("received: ", s, "video_bytes=", video_bytes, " frames per stream=", frames[0], "/", frames[1], "/", frames[2], " bytes per stream=", stream_bytes[0], "/", stream_bytes[1], "/", stream_bytes[2], app_data_report);
+				log("received: ", s, "video_bytes=", video_bytes, " frames per stream=", frames[0], "/", frames[1], "/", frames[2], " dropped=", dropped[0], "/", dropped[1], "/", dropped[2], " bytes per stream=", stream_bytes[0], "/", stream_bytes[1], "/", stream_bytes[2], app_data_report);
 			}
 		}
 		log("session done, video_bytes=", video_bytes, " app_data sent=", app_data_sent, " received=", app_data_received);
+		if (not expect_message.empty() and not expected_seen)
+		{
+			log("FAILED: no server_message containing '", expect_message, "'");
+			return 3;
+		}
 		return 0;
 	}
 	catch (std::exception & e)
