@@ -265,6 +265,8 @@ int main(int argc, char * argv[])
 	std::string log_dir;
 	app.add_option("--log-dir", log_dir, "also write the log to <dir>/wivrn-server-<time>.log (default %LOCALAPPDATA%\\wivrn\\logs)")->option_text("DIR");
 	auto no_publish = app.add_flag("--no-publish-service")->description("disable publishing the service through mDNS");
+	std::string capture_dir;
+	app.add_option("--capture", capture_dir, "mixed-reality capture (GRID #2837): record every encoded frame and its view pose under <dir>, see docs/configuration.md#capture")->option_text("DIR");
 	// Accepted for command-line compatibility with the Linux server; these features don't exist here.
 	app.add_flag("--no-manage-active-runtime,--no-fork,--no-instructions")->group("");
 
@@ -282,6 +284,8 @@ int main(int argc, char * argv[])
 
 	if (not config_file.empty())
 		configuration::set_config_file(config_file);
+	if (not capture_dir.empty())
+		configuration::set_capture_dir(capture_dir);
 
 	std::cerr << "WiVRn " << wivrn::display_version() << " starting (headless Windows build)" << std::endl;
 

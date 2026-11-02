@@ -151,6 +151,48 @@ the rules and the record format.
 }
 ```
 
+## `capture`
+Default value: unset (off)
+
+Mixed-reality capture (GRID #2837): while a headset session streams, record what the server
+encodes so an offline compositor can replay it over the headset's passthrough camera. Keys:
+- `dir`: the root directory. Each session gets its own `wivrn-capture-<YYYYmmdd-HHMMSS>/`
+  under it. The configuration is read when the session starts, so a change applies to the
+  next headset connection. On Windows, `wivrn-server.exe --capture DIR` overrides this key.
+
+Off, nothing runs. On, the server writes, per stream `i` (0 left eye, 1 right eye, 2 alpha):
+- `stream-<i>.<codec>`: the encoded bitstream, exactly the bytes sent to the headset
+  (Annex-B `h264`/`h265`, `av1` OBUs or `yuv`). This replaces `WIVRN_DUMP_VIDEO`, which keeps
+  working when capture is off.
+- `stream-<i>.jsonl`: one `frame` line per encoded frame, in bitstream order, so the n-th
+  decoded frame is the n-th `frame` line (frames the encoder skipped while waiting for the
+  headset are absent from both). Fields: `frame` (compositor frame index, shared by the three
+  streams), `stream`, `alpha` (the frame carries an alpha channel; the alpha stream exists only
+  then), `codec`, `width`/`height` (the encoded eye size, alpha is half height),
+  `display_time_headset_ns`/`display_time_host_ns` (the predicted display time on the headset's
+  clock and on the server's monotonic clock), `encode_begin_host_ns`/`encode_begin_headset_ns`,
+  `send_end_host_ns`, `clock_offset_ns`/`clock_stable` (the headset-minus-host offset in use),
+  `byte_offset`/`byte_size` (the frame's bytes in the bitstream, parameter sets included) and
+  `views`: for the left and right eye, the `position` (metres) and `orientation_xyzw` of the
+  view in the application's stage space, and the `fov` (`[left, right, up, down]`, radians,
+  signed as in `XrFovf`) the frame was rendered with.
+- A `foveation` line precedes the first `frame` line, and any frame whose foveation tables
+  differ from the previous one: `views[v].x`/`y` are the per-axis source pixel counts of the
+  encoded image (see `foveation_parameter` in `common/wivrn_packets.h`), needed to undo the
+  foveation before reprojecting.
+- `manifest.json`: the session layout (eye size, codecs, frame rate, headset name, nominal
+  fields of view, file names), written when the session starts.
+
+Cost: one buffered file write per encoded frame on the stream's send thread, plus the sidecar
+line (about 600 bytes). Nothing is allocated per frame beyond the dump itself.
+
+### Example
+```json
+{
+	"capture": { "dir": "D:/captures" }
+}
+```
+
 ## `tcp-only`
 Default value: `false`
 

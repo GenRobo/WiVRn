@@ -211,27 +211,23 @@ std::unique_ptr<video_encoder> video_encoder::create(
 	if (not res)
 		throw std::runtime_error("Failed to create encoder " + settings.encoder_name);
 
-	auto wivrn_dump_video = std::getenv("WIVRN_DUMP_VIDEO");
-	if (wivrn_dump_video)
+	// Mixed-reality capture (GRID #2837): the bitstream and its frame sidecar in the session directory.
+	// WIVRN_DUMP_VIDEO keeps the bitstream alone at a path of its own when capture is off.
+	if (settings.capture_dir)
+	{
+		auto base = *settings.capture_dir / ("stream-" + std::to_string(stream_idx));
+		auto bitstream = base.string() + "." + capture::bitstream_extension(settings.codec);
+		res->video_dump.open(bitstream, std::ios::binary);
+		if (not res->video_dump)
+			U_LOG_W("Capture: cannot open %s", bitstream.c_str());
+		else
+			res->capture_log.open(base.string() + ".jsonl");
+	}
+	else if (auto wivrn_dump_video = std::getenv("WIVRN_DUMP_VIDEO"))
 	{
 		std::string file(wivrn_dump_video);
-		file += "-" + std::to_string(stream_idx);
-		switch (settings.codec)
-		{
-			case h264:
-				file += ".h264";
-				break;
-			case h265:
-				file += ".h265";
-				break;
-			case av1:
-				file += ".av1";
-				break;
-			case raw:
-				file += ".yuv";
-				break;
-		}
-		res->video_dump.open(file);
+		file += "-" + std::to_string(stream_idx) + "." + capture::bitstream_extension(settings.codec);
+		res->video_dump.open(file, std::ios::binary);
 	}
 	return res;
 }
@@ -246,6 +242,7 @@ video_encoder::video_encoder(vk_bundle & vk,
         target_queue(target_queue),
         need_transfer(not vk.optimal_transfer(vk.queue.family_index, target_queue)),
         bitrate_multiplier(settings.bitrate_multiplier),
+        codec(settings.codec),
         shared_sender(async_send ? sender::get() : nullptr),
         idr(std::move(idr)),
         extent{
@@ -352,6 +349,18 @@ void video_encoder::encode(wivrn_session & cnx,
 	shard.shard_idx = 0;
 	shard.view_info = view_info;
 	shard.timing_info.reset();
+	if (capture_log)
+	{
+		capture_log.stage(view_info);
+		capture_frame = {
+		        .stream = stream_idx,
+		        .index = frame_index,
+		        .codec = codec,
+		        .width = uint16_t(extent.width),
+		        .height = uint16_t(extent.height),
+		        .encode_begin_host_ns = encode_begin,
+		};
+	}
 
 	stats[stream_idx % 3].encode_calls++;
 	auto data = encode(encode_slot, frame_index);
@@ -375,15 +384,26 @@ void video_encoder::SendData(std::span<uint8_t> data, bool end_of_frame, bool co
 		// One SendData call per NAL; span the whole frame, not each call.
 		wivrn::trace::cpu_begin(wivrn::trace::cpu_track::network, stream_idx, shard.frame_idx, "SendData");
 		timing_info.send_begin = clock.to_headset(os_monotonic_get_ns());
+		capture_frame.byte_offset = video_dump_offset;
+	}
+	if (video_dump)
+	{
+		video_dump.write((char *)data.data(), data.size());
+		video_dump_offset += data.size();
 	}
 	if (end_of_frame)
 	{
-		timing_info.send_end = clock.to_headset(os_monotonic_get_ns());
+		auto now = os_monotonic_get_ns();
+		timing_info.send_end = clock.to_headset(now);
 		if (not timing_info.encode_end)
 			timing_info.encode_end = timing_info.send_end;
+		if (capture_log)
+		{
+			capture_frame.send_end_host_ns = now;
+			capture_frame.byte_size = video_dump_offset - capture_frame.byte_offset;
+			capture_log.write(capture_frame, clock);
+		}
 	}
-	if (video_dump)
-		video_dump.write((char *)data.data(), data.size());
 	stats[stream_idx % 3].bytes += data.size();
 	health_totals.bytes.fetch_add(data.size(), std::memory_order_relaxed);
 

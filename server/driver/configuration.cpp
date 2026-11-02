@@ -50,6 +50,7 @@ static auto resolve_path(std::filesystem::path path)
 }
 
 static std::filesystem::path config_file;
+static std::filesystem::path capture_dir_override;
 static std::filesystem::path known_keys_file = resolve_path(xdg_config_home() / "wivrn" / "known_keys.json");
 static std::filesystem::path cookie_file = resolve_path(xdg_config_home() / "wivrn" / "cookie");
 
@@ -86,6 +87,10 @@ std::filesystem::path configuration::get_config_file()
 	if (config_file.empty())
 		return resolve_path(xdg_config_home() / "wivrn" / "config.json");
 	return config_file;
+}
+void configuration::set_capture_dir(const std::filesystem::path & path)
+{
+	capture_dir_override = resolve_path(path);
 }
 
 nlohmann::json configuration::read_configuration()
@@ -255,6 +260,14 @@ configuration::configuration()
 					health.thresholds[key] = value.get<float>();
 				}
 		}
+
+		if (auto it = json.find("capture"); it != json.end() and it->is_object())
+		{
+			if (auto d = it->find("dir"); d != it->end() and d->is_string())
+				capture.dir = resolve_path(d->get<std::string>());
+		}
+		if (not capture_dir_override.empty())
+			capture.dir = capture_dir_override;
 
 		if (auto it = json.find("tcp-only"); it != json.end())
 			tcp_only = *it;

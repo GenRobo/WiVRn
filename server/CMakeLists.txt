@@ -108,6 +108,7 @@ if (WIVRN_BUILD_SERVER)
 			compositor/foveation.cpp
 			compositor/pacer.cpp
 
+			encoder/capture.cpp
 			encoder/encoder_settings.cpp
 			encoder/idr_handler.cpp
 			encoder/video_encoder.cpp
@@ -321,6 +322,15 @@ if (WIVRN_BUILD_SERVER)
 		target_include_directories(wivrn-health-test PRIVATE .)
 		target_link_libraries(wivrn-health-test PRIVATE nlohmann_json::nlohmann_json)
 		add_test(NAME health_rules COMMAND wivrn-health-test ${CMAKE_CURRENT_SOURCE_DIR}/tests/health_fixtures)
+		# Mixed-reality capture (GRID #2837): the manifest and frame sidecar the offline compositor reads.
+		add_executable(wivrn-capture-test
+			tests/capture_log.cpp
+			encoder/capture.cpp
+		)
+		target_compile_features(wivrn-capture-test PRIVATE cxx_std_20)
+		target_include_directories(wivrn-capture-test PRIVATE .)
+		target_link_libraries(wivrn-capture-test PRIVATE nlohmann_json::nlohmann_json aux_os aux_util wivrn-common xrt-external-openxr)
+		add_test(NAME capture_log COMMAND wivrn-capture-test)
 		if (WIN32)
 			# Needs a GPU, an encoder and hello_xr (WIVRN_HELLO_XR or -HelloXr); skips (77) without hello_xr.
 			add_test(NAME health_integration
