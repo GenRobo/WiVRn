@@ -122,6 +122,21 @@ Headset-to-sink data uses a bounded 16 MiB queue rather than blocking the tracki
 }
 ```
 
+## `app-margin-ms`
+Default value: `1.5`, or `U_PACING_APP_MIN_MARGIN_MS` when that environment variable is set
+
+Minimum margin, in milliseconds, between the predicted end of an application's frame and
+the compositor deadline. Range 0.5 to 5. A larger margin wakes the application earlier,
+trading a little latency for fewer late frames. Applications with variable frame times,
+such as WebXR in a browser, may need 3 to pace smoothly at 120 Hz.
+
+### Example
+```json
+{
+	"app-margin-ms": 3
+}
+```
+
 ## `tcp-only`
 Default value: `false`
 

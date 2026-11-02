@@ -34,6 +34,7 @@ class pacing_app_factory : public u_pacing_app_factory
 	friend class app_pacer;
 	std::mutex mutex;
 	std::vector<app_pacer *> app_pacers;
+	const float min_margin_ms;
 	void remove_app(app_pacer *);
 
 public:
