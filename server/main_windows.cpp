@@ -22,9 +22,12 @@
  * @brief  Headless Windows supervisor for the WiVRn Monado service.
  *
  * Replaces the Linux main.cpp (GLib main loop, D-Bus, libnotify, systemd/fork app launcher,
- * active-runtime management). One headset session per process: publish the service with DNS-SD,
- * listen on TCP <port>, authenticate, run Monado's IPC server in-process until the session ends,
- * then exit (restart the process to accept the next session).
+ * active-runtime management). Publish the service with DNS-SD, then, until stopped (Ctrl-C):
+ * listen on TCP <port>, authenticate the headset, run Monado's IPC server in-process for that
+ * headset session and go back to listening when it ends. Like the Linux server, which forks a
+ * Monado process per headset session, a session ends when the headset is gone and no OpenXR
+ * client is connected (wivrn_session::quit_if_no_client); an OpenXR client leaving while the
+ * headset stays only pauses the stream. `--one-session` exits after the first session instead.
  */
 
 #include "dnssd_publisher_windows.h"
@@ -262,6 +265,7 @@ int main(int argc, char * argv[])
 	auto version_flag = app.add_flag("--version")->description("print version and exit");
 	auto no_encrypt = app.add_flag("--no-encrypt")->description("disable encryption")->group("Debug");
 	auto pairing = app.add_flag("--pair")->description("enable pairing (a PIN is printed) even if headsets are already known");
+	auto one_session = app.add_flag("--one-session")->description("exit when the first headset session ends instead of waiting for the next headset");
 	std::string log_dir;
 	app.add_option("--log-dir", log_dir, "also write the log to <dir>/wivrn-server-<time>.log (default %LOCALAPPDATA%\\wivrn\\logs)")->option_text("DIR");
 	auto no_publish = app.add_flag("--no-publish-service")->description("disable publishing the service through mDNS");
@@ -387,10 +391,17 @@ int main(int argc, char * argv[])
 				enc_state = wivrn_connection::encryption_state::enabled;
 
 			// Monado's IPC server (named pipe) and the WiVRn session run in this process; the session
-			// takes ownership of `connection` in instance::create_system.
+			// takes ownership of `connection` in instance::create_system. It returns when the headset
+			// is gone and no OpenXR client is connected, or on Ctrl-C; everything the session owned
+			// (compositor, encoders, health monitor, capture directory, app-data relays) is destroyed
+			// with it and created again for the next headset.
 			int ret = run_session();
-			std::cerr << "Session ended (" << ret << "). Restart wivrn-server to accept another session." << std::endl;
-			return ret;
+			if (*one_session or quitting)
+			{
+				std::cerr << "Session ended (" << ret << ")" << std::endl;
+				return ret;
+			}
+			std::cerr << "Session ended (" << ret << "), waiting for the next headset" << std::endl;
 		}
 	}
 	catch (std::exception & e)
