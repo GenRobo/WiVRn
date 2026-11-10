@@ -246,7 +246,9 @@ std::optional<warning> judder(std::span<const sample> recent, const thresholds &
 	float pct = 100.f * float(s.frames.repeated + s.frames.skipped) / float(s.frames.display);
 	if (pct <= th.get("judder.pct"))
 		return std::nullopt;
-	// The class is read over the seconds the rule needs to fire, so one bad second does not name it.
+	// The class is read over the seconds the rule needs to fire, so one bad second does not name
+	// it. The headset runtime's own dropped-frame count (cumulative on Horizon OS; a fall is a
+	// reset) is the compositor's confession and counts for it too.
 	sample::frame_stats sum;
 	for (size_t i = recent.size() - std::min<size_t>(recent.size(), 3); i < recent.size(); ++i)
 	{
@@ -257,8 +259,19 @@ std::optional<warning> judder(std::span<const sample> recent, const thresholds &
 		sum.decode += f.decode;
 		sum.compositor += f.compositor;
 		sum.tracking += f.tracking;
+		sum.unattributed += f.unattributed;
+		if (f.excess_ms > sum.excess_ms)
+		{
+			sum.excess_ms = f.excess_ms;
+			sum.excess_stage = f.excess_stage;
+		}
+		int32_t dropped = recent[i].headset.compositor_dropped;
+		if (i > 0 and dropped >= 0 and recent[i - 1].headset.compositor_dropped >= 0)
+			sum.compositor += uint32_t(dropped >= recent[i - 1].headset.compositor_dropped ? dropped - recent[i - 1].headset.compositor_dropped : dropped);
 	}
-	return warning{rule_id::judder, std::format("Judder: {:.1f} % of frames repeated or skipped, mostly {}", pct, dominant_class(sum))};
+	std::string_view cls = dominant_class(sum);
+	std::string detail = cls == "unattributed" and sum.excess_ms >= 0 ? std::format(" (largest excess {} {:.1f} ms)", sum.excess_stage, sum.excess_ms) : "";
+	return warning{rule_id::judder, std::format("Judder: {:.1f} % of frames repeated or skipped, mostly {}{}", pct, cls, detail)};
 }
 
 constexpr std::array<rule, 10> all_rules{
@@ -387,6 +400,8 @@ std::string to_json_line(const sample & s, std::span<const rule_id> active)
 	        {"compositor", s.frames.compositor},
 	        {"tracking", s.frames.tracking},
 	        {"unattributed", s.frames.unattributed},
+	        {"excess_stage", s.frames.excess_stage},
+	        {"excess_ms", s.frames.excess_ms},
 	};
 	auto names = nlohmann::json::array();
 	for (auto id: active)
@@ -471,6 +486,8 @@ std::optional<sample> from_json_line(std::string_view line)
 		get(*it, "compositor", s.frames.compositor);
 		get(*it, "tracking", s.frames.tracking);
 		get(*it, "unattributed", s.frames.unattributed);
+		get(*it, "excess_stage", s.frames.excess_stage);
+		get(*it, "excess_ms", s.frames.excess_ms);
 	}
 	if (auto it = j.find("app_metrics"); it != j.end() and it->is_object())
 		for (auto & [k, v]: it->items())
@@ -486,12 +503,33 @@ std::optional<sample> from_json_line(std::string_view line)
 
 // --- judder (GRID #3095 M6c) -------------------------------------------------------------
 
+void rolling_median::push(int64_t v)
+{
+	if (fifo.size() < window)
+		fifo.push_back(v);
+	else
+	{
+		sorted.erase(std::ranges::lower_bound(sorted, fifo[next]));
+		fifo[next] = v;
+		next = (next + 1) % window;
+	}
+	sorted.insert(std::ranges::upper_bound(sorted, v), v);
+}
+
+int64_t rolling_median::median() const
+{
+	if (sorted.empty())
+		return -1;
+	size_t half = sorted.size() / 2;
+	return sorted.size() % 2 ? sorted[half] : (sorted[half - 1] + sorted[half]) / 2;
+}
+
 namespace
 {
 // Stage durations of a frame row in nanoseconds, -1 when either end is unknown, in the order
 // app (wake→submit), gpu, compositor, encoder, transit (last shard sent→received), spread
 // (first→last packet received), decode.
-constexpr size_t stage_count = 7;
+constexpr size_t stage_count = judder_classifier::stage_count;
 using stage_ns = std::array<int64_t, stage_count>;
 constexpr std::array<uint32_t sample::frame_stats::*, stage_count> stage_class{
         &sample::frame_stats::app,
@@ -502,6 +540,7 @@ constexpr std::array<uint32_t sample::frame_stats::*, stage_count> stage_class{
         &sample::frame_stats::link,
         &sample::frame_stats::decode,
 };
+constexpr std::array<std::string_view, stage_count> stage_label{"app", "gpu", "compositor", "encode", "transit", "spread", "decode"};
 
 int64_t span_ns(int64_t from, int64_t to)
 {
@@ -513,81 +552,73 @@ stage_ns stages(const frame_row & r)
 	return {span_ns(r.wake, r.submit), span_ns(r.submit, r.gpu), span_ns(r.comp0, r.comp1), span_ns(r.enc0, r.enc1), span_ns(r.send1, r.rx1), span_ns(r.rx0, r.rx1), span_ns(r.dec0, r.dec1)};
 }
 
-int64_t median(std::vector<int64_t> & v)
-{
-	if (v.empty())
-		return -1;
-	auto mid = v.begin() + v.size() / 2;
-	std::nth_element(v.begin(), mid, v.end());
-	return *mid;
-}
-
 // One application frame across its streams: the headset shows it when every stream arrived, so
-// the latest blit/display and the largest stage duration stand for the frame.
+// the latest decode/display stands for the frame; the rows keep their own stage times for the
+// per-stream baselines.
 struct frame
 {
 	uint64_t n;
 	int32_t shown; // -1: no feedback
-	int64_t pd, blit, disp, pose_t;
+	int64_t pd, wake, dec1, disp, pose_t;
 	int32_t pose_flags;
-	stage_ns st;
+	std::span<const frame_row> rows;
 };
 } // namespace
 
-sample::frame_stats judder_stats(std::span<const frame_row> rows, int64_t period_ns)
+sample::frame_stats judder_classifier::step(std::span<const frame_row> rows, int64_t period_ns)
 {
 	sample::frame_stats out;
 	if (rows.empty() or period_ns <= 0)
 		return out;
 	std::vector<frame> frames;
-	for (const auto & r: rows)
+	for (size_t i = 0; i < rows.size(); ++i)
 	{
+		const frame_row & r = rows[i];
 		if (frames.empty() or frames.back().n != r.n)
 		{
-			frames.push_back({r.n, r.shown, r.pd, r.blit, r.disp, r.pose_t, r.pose_flags, stages(r)});
+			frames.push_back({r.n, r.shown, r.pd, r.wake, r.dec1, r.disp, r.pose_t, r.pose_flags, rows.subspan(i, 1)});
 			continue;
 		}
 		frame & f = frames.back();
 		f.shown = std::max(f.shown, r.shown);
-		f.blit = std::max(f.blit, r.blit);
+		f.dec1 = std::max(f.dec1, r.dec1);
 		f.disp = std::max(f.disp, r.disp);
-		stage_ns st = stages(r);
-		for (size_t i = 0; i < stage_count; ++i)
-			f.st[i] = std::max(f.st[i], st[i]);
+		f.rows = rows.subspan(i - f.rows.size(), f.rows.size() + 1);
 	}
-	auto hitch = [period_ns](const frame & f) {
-		return f.shown != 1 or (f.disp and f.pd and f.disp - f.pd > period_ns / 2);
-	};
-	// Baselines: the window's own on-time new frames (not a rolling history, see the header).
-	std::array<std::vector<int64_t>, stage_count> seen;
-	for (const auto & f: frames)
-		if (not hitch(f))
-			for (size_t i = 0; i < stage_count; ++i)
-				if (f.st[i] >= 0)
-					seen[i].push_back(f.st[i]);
-	stage_ns med;
-	for (size_t i = 0; i < stage_count; ++i)
-		med[i] = median(seen[i]);
+	auto late = [period_ns](const frame & f) { return f.disp and f.pd and f.disp - f.pd > period_ns / 2; };
+	auto hitch = [&](const frame & f) { return f.shown != 1 or late(f); };
 
-	// The stage a hitch frame used the budget on, as a frame_stats member.
+	// The largest excess of any stage of any row over its stream's baseline: (excess, stage).
+	auto largest_excess = [&](const frame & f) {
+		std::pair<int64_t, int> best{0, -1};
+		for (const frame_row & r: f.rows)
+		{
+			stage_ns st = stages(r);
+			const auto & med = medians[r.s % frame_ring::streams];
+			for (size_t i = 0; i < stage_count; ++i)
+				if (int64_t m = med[i].median(); st[i] >= 0 and m >= 0 and st[i] - m > best.first)
+					best = {st[i] - m, int(i)};
+		}
+		return best;
+	};
+	// The stage a hitch frame used the budget on, as a frame_stats member; records the largest
+	// excess when nothing explains the frame.
 	auto classify = [&](const frame & f) -> uint32_t sample::frame_stats::* {
 		constexpr int32_t tracked = 0b1100; // orientation and position tracked
-		if ((f.pose_flags >= 0 and (f.pose_flags & tracked) != tracked) or (f.pose_t and f.disp and f.disp - f.pose_t > 2 * period_ns))
+		if ((f.pose_flags >= 0 and (f.pose_flags & tracked) != tracked) or (f.pose_t and f.wake and f.wake - f.pose_t > 2 * period_ns))
 			return &sample::frame_stats::tracking;
 		if (f.shown < 0)
 			return &sample::frame_stats::link; // nothing came back: the shards never reached the headset
-		int best = -1;
-		int64_t excess = 0;
-		for (size_t i = 0; i < stage_count; ++i)
-			if (f.st[i] >= 0 and med[i] >= 0 and f.st[i] - med[i] > excess)
-			{
-				excess = f.st[i] - med[i];
-				best = int(i);
-			}
-		if (best >= 0 and excess > period_ns / 2)
-			return stage_class[size_t(best)];
-		if (f.blit and f.pd and f.blit <= f.pd)
+		auto [excess, stage] = largest_excess(f);
+		if (stage >= 0 and excess > period_ns / 2)
+			return stage_class[size_t(stage)];
+		if (f.dec1 and f.pd and f.dec1 <= f.pd - period_ns / 2)
 			return &sample::frame_stats::compositor;
+		if (stage >= 0 and float(excess) * 1e-6f > out.excess_ms)
+		{
+			out.excess_ms = float(excess) * 1e-6f;
+			out.excess_stage = stage_label[size_t(stage)];
+		}
 		return &sample::frame_stats::unattributed;
 	};
 
@@ -602,11 +633,21 @@ sample::frame_stats judder_stats(std::span<const frame_row> rows, int64_t period
 		else if (f.shown > 1)
 			out.repeated += uint32_t(f.shown - 1);
 		if (not hitch(f))
+		{
+			// An on-time new frame extends its streams' baselines, frame by frame as the reader does.
+			for (const frame_row & r: f.rows)
+			{
+				stage_ns st = stages(r);
+				for (size_t s = 0; s < stage_count; ++s)
+					if (st[s] >= 0)
+						medians[r.s % frame_ring::streams][s].push(st[s]);
+			}
 			continue;
+		}
 		// A repeated frame filled the slot of the next one (the late one), so that frame is the
 		// cause, as in the GRID reader; the next frame counts again for its own lateness. With the
 		// successor outside the window the repeat stays unattributed rather than guessed.
-		if (f.shown > 1 and not(f.disp and f.pd and f.disp - f.pd > period_ns / 2))
+		if (f.shown > 1 and not late(f))
 		{
 			if (i + 1 >= frames.size())
 				out.unattributed++;
@@ -622,7 +663,7 @@ sample::frame_stats judder_stats(std::span<const frame_row> rows, int64_t period
 std::string_view dominant_class(const sample::frame_stats & f)
 {
 	std::pair<uint32_t, std::string_view> best{0, "unattributed"};
-	for (auto [count, name]: {std::pair<uint32_t, std::string_view>{f.link, "link"}, {f.app, "app"}, {f.encode, "encode"}, {f.decode, "decode"}, {f.compositor, "headset-compositor"}, {f.tracking, "tracking"}})
+	for (auto [count, name]: {std::pair<uint32_t, std::string_view>{f.link, "link"}, {f.app, "app"}, {f.encode, "encode"}, {f.decode, "decode"}, {f.compositor, "compositor"}, {f.tracking, "tracking"}, {f.unattributed, "unattributed"}})
 		if (count > best.first)
 			best = {count, name};
 	return best.second;

@@ -390,7 +390,7 @@ health::sample health_monitor::collect(int64_t now_unix_s)
 		std::vector<health::frame_row> rows;
 		health::settled_rows(health::frames(), judder_next_n, video_streams, os_monotonic_get_ns(), [&rows](const health::frame_row & row) { rows.push_back(row); });
 		std::ranges::sort(rows, {}, [](const health::frame_row & r) { return std::pair(r.n, r.s); });
-		s.frames = health::judder_stats(rows, fb.period_ns.load(std::memory_order_relaxed));
+		s.frames = judder.step(rows, fb.period_ns.load(std::memory_order_relaxed));
 	}
 
 	if (fill)

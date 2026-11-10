@@ -74,17 +74,22 @@ unknown (`-1`) until the headset reports them (milestone 3) and never fire a rul
 | `judder` | repeated + skipped frames > `judder.pct` (2) % of the display frames settled that second, from the [frame record](#frame-record)'s ring (`frames` below); the 3 s persistence of every rule makes it "for 3 s" | Judder: X % of frames repeated or skipped, mostly *class* |
 
 `judder` names the class that explains most hitches over the three seconds it took to fire,
-attributed per frame like `vivarium-teleop xr trace` (GRID#3095 design 6.6) but simplified so it
-runs on the ring's fields once per second: `tracking` (pose not tracked, or older than two
-periods at display); otherwise the stage whose duration exceeds the median of the same second's
-on-time frames by more than half a period — `app` (wake to submit, GPU), `encode` (compositor,
-encoder), `link` (last shard sent to received, first to last packet received; also a frame with
-no feedback at all), `decode`; otherwise `headset-compositor` when the frame was blitted before
-its predicted display time and still repeated, skipped or late; else `unattributed`. A repeated
+attributed per frame like `vivarium-teleop xr trace` (GRID#3095 design 6.6, calibrated on the
+2026-11-10 laptop record: frames land in their slot, the pacer wakes the application 3.6 periods
+ahead, decode ends 36 ms before the slot, the pose is 2.6 ms old at wake and 53 ms old at
+photon) but simplified so it runs on the ring's fields once per second: `tracking` (pose not
+tracked, or older than two periods **when the application woke** — its age at photon is the
+pipeline latency, not a tracking fault); otherwise the stage whose duration exceeds its stream's
+rolling median of the last 300 on-time frames by more than half a period — `app` (wake to
+submit, GPU), `encode` (compositor, encoder), `link` (last shard sent to received, first to last
+packet received; also a frame with no feedback at all), `decode`; otherwise `compositor` (the
+headset's) when the frame was decoded at least half a period before its predicted display time
+and still repeated, skipped or late; else `unattributed`, in which case the message adds the
+largest excess seen (`mostly unattributed (largest excess decode 4.0 ms)`). The headset runtime's
+own `compositor_dropped` increase over those seconds counts for `compositor` as well. A repeated
 frame is blamed on the frame after it (the late one), as the reader does. Not here: the
-`session`, `app-half-rate` and `content-cadence` classes and the rolling 300-frame baselines of
-the reader, so a second in which every frame is late finds no excess and counts as
-`unattributed`; a repeat whose successor settles in the next second is `unattributed` too.
+`session`, `app-half-rate` and `content-cadence` classes (no event or viewer input), and a
+repeat whose successor settles in the next second is `unattributed`.
 
 Thresholds come from measurements on 2026-10-29/30 (Quest 3, RTX 3080 Ti laptop, RTX desktop,
 HEVC 10-bit, 50.8 Mb/s per eye): clean sessions showed 0–12 IDR requests per session and
@@ -127,7 +132,8 @@ a competing browser dropped the application from 120 Hz to 66–82 Hz.
   account for (the sum of `shown`; `-1` while none settled), `repeated` and `skipped` the
   hitches, and the class counts the hitches by cause as the `judder` rule attributes them
   (repeats and late frames both count, so the classes can add up to more than `repeated +
-  skipped`).
+  skipped`); `excess_stage` / `excess_ms` the largest stage excess among the unattributed ones
+  (`""` / `-1` when none).
 - Event lines (`"type":"event"`, `"type":"warning"`) are interleaved with the samples in the
   connector stream (below); the file holds them too, so a reader must look at `type`.
 
