@@ -18,6 +18,7 @@
  */
 #include "encoder_settings.h"
 
+#include "capture.h"
 #include "driver/configuration.h"
 #include "driver/wivrn_session.h"
 #include "util/u_logging.h"
@@ -383,6 +384,14 @@ std::array<encoder_settings, 3> get_encoder_settings(wivrn::vk_bundle & bundle, 
 		i.bit_depth = bit_depth.value_or(10);
 
 	split_bitrate(res, settings.bitrate_bps);
+
+	// Mixed-reality capture (GRID #2837): one directory per session, shared by the three streams
+	if (config.capture.dir)
+	{
+		auto dir = capture::start_session(*config.capture.dir, res, info);
+		for (auto & i: res)
+			i.capture_dir = dir;
+	}
 	return res;
 }
 } // namespace wivrn

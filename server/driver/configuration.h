@@ -73,6 +73,11 @@ struct configuration
 		std::optional<std::filesystem::path> log_dir;
 		std::map<std::string, float> thresholds;
 	} health;
+	// Mixed-reality capture (GRID #2837): record every encoded frame and its view pose, see docs/configuration.md
+	struct capture_options
+	{
+		std::optional<std::filesystem::path> dir;
+	} capture;
 	std::optional<std::array<float, 3>> grip_surface;
 	std::vector<std::string> application;
 	std::vector<app_data_sink> app_data;
@@ -92,6 +97,8 @@ struct configuration
 	static void set_config_file(const std::filesystem::path &);
 	static std::filesystem::path get_config_file();
 
+	// Command-line override of `capture.dir`, applied to every configuration read afterwards
+	static void set_capture_dir(const std::filesystem::path &);
 	static nlohmann::json read_configuration();
 	configuration();
 };

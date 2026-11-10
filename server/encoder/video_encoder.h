@@ -19,6 +19,7 @@
 
 #pragma once
 
+#include "capture.h"
 #include "driver/clock_offset.h"
 #include "idr_handler.h"
 #include "wivrn_packets.h"
@@ -107,6 +108,14 @@ private:
 	clock_offset clock;
 
 	std::ofstream video_dump;
+	uint64_t video_dump_offset = 0;
+
+	// Mixed-reality capture (GRID #2837): the frame sidecar next to the dump. Filled in encode(),
+	// written at the end of the frame in SendData, on the same thread as the dump.
+	capture::frame_log capture_log;
+	to_headset::video_stream_data_shard::view_info_t capture_view;
+	capture::frame_log::frame capture_frame;
+	const video_codec codec;
 
 	std::shared_ptr<sender> shared_sender;
 
