@@ -258,9 +258,15 @@ void test_json_round_trip()
 
 	s.app_metrics_dropped = 3;
 	s.app_warnings = {"sim_slow"};
+	s.app.half_rate_probes = 2;
+	s.app.half_rate_recoveries = 1;
 	back = from_json_line(to_json_line(s, {}));
 	CHECK(back and back->app_metrics_dropped == 3);
 	CHECK(back and back->app_warnings == std::vector<std::string>{"sim_slow"});
+	CHECK(back and back->app.half_rate_probes == 2 and back->app.half_rate_recoveries == 1);
+	// Records written before the counters existed read back as zero.
+	auto old = from_json_line(R"({"t":1,"app":{"hz":66,"cpu_ms":15.0,"gpu_ms":0.14,"late_pct":3.0}})");
+	CHECK(old and old->app.half_rate_probes == 0 and old->app.half_rate_recoveries == 0 and old->app.hz == 66);
 	CHECK(to_json_line(clean_at(0), {}).find("app_") == std::string::npos); // nothing posted: keys absent
 }
 

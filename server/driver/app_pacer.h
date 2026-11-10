@@ -42,7 +42,10 @@ class pacing_app_factory : public u_pacing_app_factory
 public:
 	using base_t = u_pacing_app_factory;
 
+	/// Margin from "app-margin-ms" in the configuration file (or U_PACING_APP_MIN_MARGIN_MS).
 	pacing_app_factory();
+	/// Margin given explicitly; the unit test harness.
+	explicit pacing_app_factory(float min_margin_ms);
 	xrt_result_t create(struct u_pacing_app ** out_upa);
 	void destroy();
 
@@ -50,7 +53,8 @@ public:
 
 	/// Counters for the stream health monitor (GRID #2834), reset by each call: frames the
 	/// applications delivered since the last call, how many were delivered after the compositor
-	/// deadline, and the slowest application's smoothed CPU and GPU time in nanoseconds.
+	/// deadline, the slowest application's smoothed CPU and GPU time in nanoseconds, and the
+	/// half-rate lock-in probes issued and the ones the application answered in time.
 	struct health_counters
 	{
 		uint32_t apps;
@@ -58,12 +62,16 @@ public:
 		uint32_t late;
 		int64_t cpu_ns;
 		int64_t gpu_ns;
+		uint32_t half_rate_probes;
+		uint32_t half_rate_recoveries;
 	};
 	health_counters take_health_counters();
 
 private:
 	std::atomic<uint32_t> delivered_count{0};
 	std::atomic<uint32_t> late_count{0};
+	std::atomic<uint32_t> half_rate_probe_count{0};
+	std::atomic<uint32_t> half_rate_recovery_count{0};
 };
 
 } // namespace wivrn
