@@ -49,6 +49,7 @@ class sensors
 	const bool marker_tracking;
 	const bool rgb_camera_streaming;
 	const bool depth_camera_streaming;
+	const float marker_detect_scale;
 	bool camera_started = false;
 	bool camera_failed = false;
 	bool permission_requested = false;
@@ -56,7 +57,7 @@ class sensors
 
 public:
 	sensors(xr::instance &, xr::system &, xr::session &, vk::raii::Device &, uint32_t queue_family_index,
-	        bool marker_tracking, bool rgb_camera_streaming, bool depth_camera_streaming);
+	        bool marker_tracking, bool rgb_camera_streaming, bool depth_camera_streaming, float marker_detect_scale);
 	~sensors();
 
 	sensors(const sensors &) = delete;

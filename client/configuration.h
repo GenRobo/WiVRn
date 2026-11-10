@@ -127,6 +127,9 @@ public:
 	bool marker_tracking = false;
 	bool rgb_camera_streaming = false;
 	bool depth_camera_streaming = false;
+	// Marker detection searches a copy of the camera frame scaled by this (0.25 to 1;
+	// frames up to 640 px wide are searched as is), then refines corners on the full frame.
+	float marker_detect_scale = 0.5;
 
 	bool check_feature(feature f) const;
 	void set_feature(feature f, bool state);

@@ -326,6 +326,24 @@ for camera modes or real network status for depth-only, without an echo loop.
 Sensor messages are serialized before transport
 chunking, so concurrent JPEG, markers, status and depth cannot interleave bytes.
 
+The marker detector is bounded so it cannot starve frame submission (GRID #3095):
+it runs on one background-priority thread with OpenCV's worker pool disabled, so
+its cost is at most one core and proportional to the frames it is given. Frames
+are dropped on the camera thread, before any copy, down to CONFIGURE's detection
+rate; while no marker has been seen for a second the client caps that at 15 Hz
+regardless of the commanded rate (the PC asks for its full rate until every
+target is anchored, and 15 Hz is enough to notice a marker appear). The PC can
+still ask for less. Candidates are searched on a copy of the frame scaled by
+`marker_detect_scale` (client configuration, default `0.5`, clamped to 0.25..1;
+frames up to 640 px wide are searched as is), then each marker's corners are
+refined to subpixel precision on the full 1280×960 frame with OpenCV's own ArUco
+refinement window, so the scale costs recall on markers smaller than about 20 px
+but not corner precision. Once a minute the client logs
+`VivariumMarkers: 14.8 Hz, 11.2 ms/frame, 1 thread`: the measured report rate,
+the detector thread's CPU time per frame, and how many threads carry the
+`marker-detector` name (OpenCV workers inherit it; more than one means the pool
+is back).
+
 Depth is opt-in through both the local switch and CONFIGURE's optional `>BH`
 depth flag/rate tail. The client requests Spatial Data permission only when
 depth is requested and requires `XR_META_environment_depth`; unsupported

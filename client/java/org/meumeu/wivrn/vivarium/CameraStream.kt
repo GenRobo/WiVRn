@@ -37,6 +37,7 @@ import android.hardware.camera2.params.SessionConfiguration
 import android.media.ImageReader
 import android.os.Handler
 import android.os.HandlerThread
+import android.os.Process
 import android.os.SystemClock
 import android.util.Log
 import java.io.ByteArrayOutputStream
@@ -95,6 +96,7 @@ class CameraStream(
     private val markerTracking: Boolean,
     private val rgbCameraStreaming: Boolean,
     private val depthCameraStreaming: Boolean,
+    private val detectScale: Float,
 ) {
     @Volatile private var running = false
     private var calibration: Calibration? = null
@@ -117,8 +119,9 @@ class CameraStream(
     private val rateCap by lazy { FrameRateCap() }
     // Detection: the camera thread copies luma into `latest.back()` and publishes it once
     // the frame's capture result is known; the detector thread takes the newest frame.
+    // `detectGate` admits frames at the PC's rate once a marker is seen, else 15 Hz.
     private val latest by lazy { LatestFrame(WIDTH, HEIGHT) }
-    private val detectCap by lazy { FrameRateCap() }
+    private val detectGate by lazy { DetectGate() }
     private var detectorReady = false
     private var awaitingDetectionNs = -1L
     // Incoming bytes arrive on the WiVRn network thread; one reader and one reply buffer for it.
@@ -158,7 +161,10 @@ class CameraStream(
         if (markerTracking) {
             detectorReady = OpenCVLoader.initLocal()
             if (detectorReady) {
-                detector = thread(name = "marker-detector") { MarkerDetector(latest, ::sendMarkers).run { running } }
+                detector = thread(name = "marker-detector") {
+                    Process.setThreadPriority(Process.THREAD_PRIORITY_BACKGROUND)
+                    MarkerDetector(latest, DetectScale(WIDTH, HEIGHT, detectScale), ::sendMarkers).run { running }
+                }
             } else {
                 Log.e(TAG, "OpenCV failed to load; marker detection is off")
             }
@@ -287,7 +293,7 @@ class CameraStream(
             if (!linked) return
             val current = config
             val dictionary = current.detectDictionary
-            if (markerTracking && detectorReady && dictionary != null && detectCap.accept(it.timestamp, current.detectRateHz)) {
+            if (markerTracking && detectorReady && dictionary != null && detectGate.accept(it.timestamp, current.detectRateHz)) {
                 val plane = it.planes[0]
                 latest.back().apply {
                     copyLuma(plane.buffer, plane.rowStride)
@@ -347,6 +353,7 @@ class CameraStream(
 
     /** Detector thread: sends one frame's markers; dropped while the PC is not there. */
     private fun sendMarkers(report: MarkerReport) {
+        if (report.count > 0) detectGate.seen(report.sensorTimestampNs)
         if (!running || !linked || !markerTracking || config.detectDictionary != report.dictionary) return
         markersMessage.reset()
         StreamFormat.writeMarkers(markersMessage.out, report)

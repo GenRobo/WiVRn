@@ -853,7 +853,7 @@ void scenes::stream::render(const XrFrameState & frame_state)
 		vivarium_sensors.reset();
 	else if (not vivarium_sensors)
 		vivarium_sensors = std::make_unique<vivarium::sensors>(instance, system, session, device, queue_family_index,
-		                                                    config.marker_tracking, config.rgb_camera_streaming, config.depth_camera_streaming);
+		                                                    config.marker_tracking, config.rgb_camera_streaming, config.depth_camera_streaming, config.marker_detect_scale);
 #endif
 	if (state_ == state::shutdown)
 		application::pop_scene();
