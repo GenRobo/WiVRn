@@ -18,6 +18,7 @@
 
 #include "app_pacer.h"
 #include "configuration.h"
+#include "health_frames.h"
 
 #include "util/u_debug.h"
 #include "util/u_time.h"
@@ -53,7 +54,9 @@ class app_pacer : public u_pacing_app
 	{
 		int64_t frame_id;
 		int64_t wake_up;
+		int64_t begin;
 		int64_t delivered;
+		int64_t gpu_done;
 		int64_t predicted_display;
 	};
 	std::array<frame, 16> frames{};
@@ -134,7 +137,7 @@ public:
 	void mark_discarded(int64_t frame_id, int64_t when_ns);
 	void mark_delivered(int64_t frame_id, int64_t when_ns, int64_t display_time_ns);
 	void mark_gpu_done(int64_t frame_id, int64_t when_ns);
-	void latched(int64_t frame_id, int64_t when_ns, int64_t system_frame_id) {}
+	void latched(int64_t frame_id, int64_t when_ns, int64_t system_frame_id);
 	void retired(int64_t frame_id, int64_t when_ns) {}
 	void info(int64_t predicted_display_time_ns,
 	          int64_t predicted_display_period_ns,
@@ -218,6 +221,8 @@ void app_pacer::mark_point(int64_t frame_id, enum u_timing_point point, int64_t 
 			frame.wake_up = when_ns;
 			break;
 		case U_TIMING_POINT_BEGIN:
+			frame.begin = when_ns;
+			break;
 		case U_TIMING_POINT_SUBMIT_BEGIN:
 		case U_TIMING_POINT_SUBMIT_END:
 			break;
@@ -317,12 +322,34 @@ int64_t lerp0(int64_t a, int64_t b, double t)
 void app_pacer::mark_gpu_done(int64_t frame_id, int64_t when_ns)
 {
 	auto & frame = get_frame(frame_id);
-	if (frame.frame_id != frame_id or not(frame.wake_up and frame.delivered))
+	if (frame.frame_id != frame_id)
+		return;
+	frame.gpu_done = when_ns;
+	if (not(frame.wake_up and frame.delivered))
 		return;
 
 	std::lock_guard lock(mutex);
 	cpu_time = lerp0(cpu_time, std::min(3 * period, frame.delivered - frame.wake_up), 0.1);
 	gpu_time = lerp0(gpu_time, std::min(3 * period, when_ns - frame.delivered), 0.1);
+}
+
+void app_pacer::latched(int64_t frame_id, int64_t when_ns, int64_t system_frame_id)
+{
+	// Frame record (GRID #3095): the compositor shows this application frame in system frame
+	// `system_frame_id`, the index the encoder and the headset's feedback use. A frame the
+	// application has not replaced is latched again by the next system frame, so a row with
+	// the same application timings as the previous one is a repeat on the PC side.
+	auto & frame = get_frame(frame_id);
+	if (frame.frame_id != frame_id or system_frame_id < 0)
+		return;
+	health::frame_ring::app_times times{
+	        .wake = frame.wake_up,
+	        .begin = frame.begin,
+	        .submit = frame.delivered,
+	        .gpu = frame.gpu_done,
+	        .predicted_display = frame.predicted_display,
+	};
+	health::frames().app_latched(uint64_t(system_frame_id), times);
 }
 
 pacing_app_factory::pacing_app_factory() :

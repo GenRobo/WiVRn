@@ -29,6 +29,7 @@
 #include <map>
 #include <set>
 #include <spdlog/spdlog.h>
+#include <string>
 #include <vulkan/vulkan.h>
 #include <openxr/openxr.h>
 #include <openxr/openxr_platform.h>
@@ -210,6 +211,14 @@ xr::instance::instance(std::string_view application_name, std::vector<const char
 			extensions.push_back("XR_EXT_debug_utils");
 		}
 #endif
+	}
+	// One greppable line for the runtime's whole list (GRID #3095: does this OS build expose
+	// XR_META_performance_metrics?), since the per-extension lines above are easy to lose in logcat.
+	{
+		std::string names;
+		for (const XrExtensionProperties & i: all_extensions)
+			names += std::string(names.empty() ? "" : " ") + i.extensionName;
+		spdlog::info("OpenXR instance extensions ({}): {}", all_extensions.size(), names);
 	}
 
 	XrInstanceCreateInfo create_info{

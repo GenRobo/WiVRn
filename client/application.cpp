@@ -1329,14 +1329,20 @@ void application::initialize()
 	for (const auto & i: interaction_profiles)
 		opt_extensions.insert(opt_extensions.end(), i.required_extensions.begin(), i.required_extensions.end());
 
+	// GRID #3095 M6c keys the headset's compositor counters on this extension; say once whether
+	// the runtime has it (the full list is logged by xr::instance).
+	bool performance_metrics = false;
 	for (const auto & ext: xr::instance::extensions())
 	{
+		if (strcmp(ext.extensionName, "XR_META_performance_metrics") == 0)
+			performance_metrics = true;
 		auto it = std::find_if(opt_extensions.begin(),
 		                       opt_extensions.end(),
 		                       [&ext](const char * i) { return strcmp(i, ext.extensionName) == 0; });
 		if (it != opt_extensions.end() and not runtime_hmd_traits.blacklisted_extensions.contains(ext.extensionName))
 			xr_extensions.push_back(*it);
 	}
+	spdlog::info("XR_META_performance_metrics: {}", performance_metrics ? "available" : "absent");
 
 #ifdef __ANDROID__
 	xr_instance =

@@ -354,4 +354,106 @@ frame_events & events()
 	return queue;
 }
 
+// --- writer --------------------------------------------------------------------------------
+
+frame_writer::frame_writer(std::filesystem::path dir_, size_t max_bytes_, std::function<std::string()> stamp_) :
+        dir(std::move(dir_)), max_bytes(max_bytes_), stamp(std::move(stamp_))
+{
+}
+
+frame_writer::~frame_writer() = default;
+
+std::filesystem::path frame_writer::current() const
+{
+	return paths.empty() ? std::filesystem::path{} : paths.back();
+}
+
+void frame_writer::open()
+{
+	out.close();
+	std::error_code ec;
+	std::filesystem::create_directories(dir, ec);
+	while (paths.size() >= size_t(keep))
+	{
+		std::filesystem::remove(paths.front(), ec);
+		paths.erase(paths.begin());
+	}
+	paths.push_back(dir / ("wivrn-frames-" + stamp() + ".jsonl"));
+	out.open(paths.back(), std::ios::out | std::ios::trunc | std::ios::binary);
+	written = 0;
+	out << header << '\n';
+	written += header.size() + 1;
+}
+
+void frame_writer::write(const std::string & line)
+{
+	if (written + line.size() + 1 > max_bytes)
+		open();
+	out << line << '\n';
+	written += line.size() + 1;
+	if (on_line)
+		on_line(line);
+}
+
+void frame_writer::start(const frame_ring & ring, const frame_header & h)
+{
+	t0 = h.t0_mono_ns;
+	stream_count = std::min<uint8_t>(h.streams, frame_ring::streams);
+	header = frame_header_line(h);
+	open();
+	if (on_line)
+		on_line(header);
+	// Start at the oldest frame predicted at or after t0 (the ring is older than the session).
+	int64_t first = ring.latest() + 1;
+	while (first > 0)
+	{
+		auto row = ring.read(uint64_t(first - 1), 0);
+		if (not row or row->pd < t0)
+			break;
+		--first;
+	}
+	next_n.fill(first);
+}
+
+void frame_writer::tick(const frame_ring & ring, int64_t now_ns, int64_t off_ns, int64_t jitter_ns)
+{
+	if (not started())
+		return;
+	int64_t latest = ring.latest();
+	for (uint8_t s = 0; s < stream_count; ++s)
+	{
+		int64_t & n = next_n[s];
+		int64_t displayed = ring.latest_displayed(s);
+		while (n <= latest)
+		{
+			auto row = ring.read(uint64_t(n), s);
+			if (not row)
+			{
+				// Taken over by a frame `size` later: the writer fell behind, skip the gap.
+				if (latest - n >= int64_t(frame_ring::size))
+				{
+					++n;
+					continue;
+				}
+				break;
+			}
+			bool final = displayed >= n + 3 or now_ns - row->pd >= settle_ns;
+			if (not final)
+				break;
+			write(frame_line(*row, t0));
+			++n;
+		}
+	}
+	write(frame_clock_line(now_ns, t0, off_ns, jitter_ns));
+	out.flush();
+}
+
+void frame_writer::event(int64_t t_ns, std::string_view name, const nlohmann::json & value)
+{
+	if (not started())
+		return;
+	write(frame_event_line(t_ns, t0, name, value));
+	out.flush();
+}
+
 } // namespace wivrn::health

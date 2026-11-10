@@ -6,7 +6,10 @@
 #include "app_pacer.h"
 #include "encoder/idr_handler.h"
 #include "encoder/video_encoder.h"
+#include "hostname.h"
+#include "os/os_time.h"
 #include "util/u_logging.h"
+#include "version.h"
 
 #include <chrono>
 #include <cmath>
@@ -111,12 +114,13 @@ struct nvml_encoder_utilization
 #endif
 } // namespace
 
-health_monitor::health_monitor(configuration::health_options options_, std::filesystem::path default_log_dir, send_fn send_, fill_fn fill_) :
+health_monitor::health_monitor(configuration::health_options options_, std::filesystem::path default_log_dir, uint8_t video_streams_, send_fn send_, fill_fn fill_) :
         options(std::move(options_)),
         log_dir(options.log_dir.value_or(std::move(default_log_dir))),
         send(std::move(send_)),
         fill(std::move(fill_)),
-        thresholds(health::thresholds::with(options.thresholds))
+        thresholds(health::thresholds::with(options.thresholds)),
+        video_streams(video_streams_)
 {
 	history.reserve(history_size);
 	if (options.log)
@@ -129,6 +133,18 @@ health_monitor::health_monitor(configuration::health_options options_, std::file
 			U_LOG_I("Stream health log: %s", path.string().c_str());
 		else
 			U_LOG_W("Stream health log: cannot open %s", path.string().c_str());
+	}
+	// Frame record (GRID #3095): the ring forgets the previous session; t0 is the session start,
+	// the file opens on the first tick, when the display rate for the header is known.
+	health::frames().reset();
+	frames_t0_ns = os_monotonic_get_ns();
+	if (options.frames)
+	{
+		frames_writer = std::make_unique<health::frame_writer>(log_dir, size_t(options.frames_max_mb) << 20, timestamp_for_filename);
+		frames_writer->on_line = [this](const std::string & line) {
+			if (on_line)
+				on_line(line);
+		};
 	}
 	started_unix_s = unix_now_s();
 	thread = std::jthread([this](std::stop_token stop) { run(stop); });
@@ -158,7 +174,7 @@ std::filesystem::path health_monitor::log_path(const char * prefix, const char *
 	return log_dir / (std::string(prefix) + timestamp_for_filename() + extension);
 }
 
-void health_monitor::on_feedback(const from_headset::feedback & f)
+void health_monitor::on_feedback(const from_headset::feedback & f, const clock_offset & o)
 {
 	// All timestamps are in the headset clock; only differences are used.
 	auto ms = [](int64_t a, int64_t b) { return (a and b) ? double(b - a) * ns_to_ms : -1.0; };
@@ -168,6 +184,21 @@ void health_monitor::on_feedback(const from_headset::feedback & f)
 	double decode = ms(f.sent_to_decoder, f.received_from_decoder);
 	double m2p = ms(f.encode_begin, f.displayed);
 	uint8_t stream = f.stream_index % 3;
+
+	// Frame record: the headset's side of the row, in server time. Relaxed stores, no lock.
+	auto server_time = [&o](int64_t t) { return t ? o.from_headset(t) : 0; };
+	health::frame_ring::feedback_times times{
+	        .rx0 = server_time(f.received_first_packet),
+	        .rx1 = server_time(f.received_last_packet),
+	        .dec0 = server_time(f.sent_to_decoder),
+	        .dec1 = server_time(f.received_from_decoder),
+	        .blit = server_time(f.blitted),
+	        .disp = server_time(f.displayed),
+	        .shown = f.times_displayed,
+	        .complete = f.sent_to_decoder != 0,
+	        .off_ns = o.b,
+	};
+	health::frames().feedback(f.frame_index, f.stream_index, times);
 
 	std::lock_guard lock(mutex);
 	if (encode >= 0)
@@ -198,29 +229,16 @@ void health_monitor::on_feedback(const from_headset::feedback & f)
 		}
 		last = f.displayed;
 	}
-	auto & ring = fb.ring[stream];
-	ring[fb.ring_next[stream]] = {
-	        .frame_index = f.frame_index,
-	        .stream = f.stream_index,
-	        .encode_begin = f.encode_begin,
-	        .encode_end = f.encode_end,
-	        .send_begin = f.send_begin,
-	        .send_end = f.send_end,
-	        .received_first = f.received_first_packet,
-	        .received_last = f.received_last_packet,
-	        .sent_to_decoder = f.sent_to_decoder,
-	        .received_from_decoder = f.received_from_decoder,
-	        .blitted = f.blitted,
-	        .displayed = f.displayed,
-	        .times_displayed = f.times_displayed,
-	};
-	fb.ring_next[stream] = (fb.ring_next[stream] + 1) % ring_size;
-	fb.ring_count[stream] = std::min(fb.ring_count[stream] + 1, ring_size);
+	fb.off_ns = o.b;
+	fb.off_min_ns = std::min(fb.off_min_ns, o.b);
+	fb.off_max_ns = std::max(fb.off_max_ns, o.b);
 }
 
 void health_monitor::set_display_hz(float hz)
 {
-	fb.period_ns.store(hz > 0 ? int64_t(1e9 / hz) : 0, std::memory_order_relaxed);
+	int64_t period = hz > 0 ? int64_t(1e9 / hz) : 0;
+	if (fb.period_ns.exchange(period, std::memory_order_relaxed) != period and period)
+		on_event("display_hz", hz);
 }
 
 void health_monitor::on_telemetry(const from_headset::telemetry & t)
@@ -235,6 +253,14 @@ void health_monitor::on_session_event(std::string_view event)
 	paused = event == "session_paused";
 	write_line(nlohmann::json{{"t", unix_now_s()}, {"type", "event"}, {"event", event}}.dump());
 	U_LOG_I("Stream health: %s", std::string(event).c_str());
+	on_event(event == "session_paused" ? "pause" : "resume", nullptr);
+}
+
+void health_monitor::on_event(std::string_view name, nlohmann::json value)
+{
+	std::lock_guard lock(frames_mutex);
+	if (frames_writer)
+		frames_writer->event(os_monotonic_get_ns(), name, value);
 }
 
 void health_monitor::write_line(const std::string & line)
@@ -377,36 +403,21 @@ void health_monitor::write_event_dump(const health::rule_state::event & e, const
 	j["warning"] = health::name(e.id);
 	j["message"] = e.message;
 	j["sample"] = nlohmann::json::parse(health::to_json_line(s, state.active()));
+	// The last 600 frames of each stream, as frame-record rows relative to the session's t0
+	// (docs/health.md "Frame record").
+	const auto & ring = health::frames();
+	int64_t t0 = frames_t0_ns;
+	int64_t latest = ring.latest();
 	auto streams = nlohmann::json::array();
+	for (uint8_t stream = 0; stream < video_streams and stream < health::frame_ring::streams; ++stream)
 	{
-		std::lock_guard lock(mutex);
-		for (size_t stream = 0; stream < 3; ++stream)
-		{
-			auto frames = nlohmann::json::array();
-			size_t count = fb.ring_count[stream];
-			size_t start = (fb.ring_next[stream] + ring_size - count) % ring_size;
-			for (size_t i = 0; i < count; ++i)
-			{
-				const auto & r = fb.ring[stream][(start + i) % ring_size];
-				frames.push_back({
-				        r.frame_index,
-				        r.encode_begin,
-				        r.encode_end,
-				        r.send_begin,
-				        r.send_end,
-				        r.received_first,
-				        r.received_last,
-				        r.sent_to_decoder,
-				        r.received_from_decoder,
-				        r.blitted,
-				        r.displayed,
-				        r.times_displayed,
-				});
-			}
-			streams.push_back(frames);
-		}
+		auto frames = nlohmann::json::array();
+		for (int64_t n = std::max<int64_t>(0, latest - 599); n <= latest; ++n)
+			if (auto row = ring.read(uint64_t(n), stream))
+				frames.push_back(nlohmann::json::parse(health::frame_line(*row, t0)));
+		streams.push_back(std::move(frames));
 	}
-	j["columns"] = {"frame_index", "encode_begin", "encode_end", "send_begin", "send_end", "received_first", "received_last", "sent_to_decoder", "received_from_decoder", "blitted", "displayed", "times_displayed"};
+	j["t0_mono_ns"] = t0;
 	j["streams"] = streams;
 	auto path = log_path("wivrn-health-event-", ".json");
 	std::ofstream out(path);
@@ -437,6 +448,7 @@ void health_monitor::run(std::stop_token stop)
 			write_line(nlohmann::json{{"t", now}, {"type", "warning"}, {"id", id}, {"state", "cleared"}, {"source", "app"}}.dump());
 		health::sample s = collect(now);
 		s.encoder.util_pct = nvml.read();
+		frames_tick(s);
 		if (not primed)
 		{
 			primed = true;
@@ -483,8 +495,46 @@ void health_monitor::run(std::stop_token stop)
 					send("Stream recovered", false);
 			}
 			write_line(nlohmann::json{{"t", s.t_unix_s}, {"type", "warning"}, {"id", health::name(e.id)}, {"state", e.fired ? "fired" : "cleared"}, {"message", e.message}}.dump());
+			on_event("warning", std::string(health::name(e.id)) + (e.fired ? " fired" : " cleared"));
 		}
 	}
+}
+
+void health_monitor::frames_tick(const health::sample & s)
+{
+	if (not frames_writer)
+		return;
+	int64_t off, lo, hi;
+	{
+		std::lock_guard lock(mutex);
+		off = fb.off_ns;
+		lo = fb.off_min_ns;
+		hi = fb.off_max_ns;
+		fb.off_min_ns = INT64_MAX;
+		fb.off_max_ns = INT64_MIN;
+	}
+	int64_t now_ns = os_monotonic_get_ns();
+	std::lock_guard lock(frames_mutex);
+	if (not frames_writer->started())
+	{
+		if (s.headset.display_hz <= 0)
+			return; // the header needs the display rate; the ring keeps the frames meanwhile
+		int64_t unix_ms = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
+		health::frame_header header{
+		        .t0_mono_ns = frames_t0_ns,
+		        .t0_unix_ms = unix_ms - (now_ns - frames_t0_ns) / 1'000'000,
+		        .host = hostname(),
+		        .server = display_version(),
+		        .streams = video_streams,
+		        .display_hz = s.headset.display_hz,
+		        .period_ns = int64_t(1e9 / s.headset.display_hz),
+		};
+		frames_writer->start(health::frames(), header);
+		U_LOG_I("Stream health: frame record %s", frames_writer->current().string().c_str());
+	}
+	for (const auto & e: health::events().take())
+		frames_writer->event(e.t_ns, e.name, e.value);
+	frames_writer->tick(health::frames(), now_ns, off, lo <= hi ? hi - lo : 0);
 }
 
 } // namespace wivrn

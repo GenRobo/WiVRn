@@ -70,6 +70,8 @@ struct configuration
 		bool warnings = true;
 		bool log = true;
 		bool app_data = true;
+		bool frames = false;         // per-frame record, GRID #3095
+		uint32_t frames_max_mb = 50; // rotate the record at this size
 		std::optional<std::filesystem::path> log_dir;
 		std::map<std::string, float> thresholds;
 	} health;

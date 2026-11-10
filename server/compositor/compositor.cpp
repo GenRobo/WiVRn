@@ -31,12 +31,13 @@
 #include "util/u_time.h"
 #include "vk/vk_helpers.h"
 
+#include "driver/health_frames.h"
 #include "driver/wivrn_session.h"
 #include "encoder/video_encoder.h"
 #include "inplace_vector.hpp"
-#include <cinttypes>
 #include "utils/method.h"
 #include "utils/wivrn_trace.h"
+#include <cinttypes>
 
 #include "xrt/xrt_config_build.h" // IWYU pragma: keep
 #ifdef XRT_FEATURE_RENDERDOC
@@ -250,6 +251,8 @@ xrt_result_t compositor::predict_frame(int64_t * out_frame_id,
 	frame.waited.desired_present_time_ns = desired_present_time_ns;
 	frame.waited.present_slop_ns = present_slop_ns;
 	frame.waited.predicted_display_time_ns = predicted_display_time_ns;
+	// Frame record (GRID #3095): the first event of system frame `frame_id` resets its ring slot.
+	health::frames().predicted(uint64_t(frame_id), predicted_display_time_ns);
 
 	*out_frame_id = frame_id;
 	*out_wake_time_ns = wake_up_time_ns;
@@ -310,6 +313,7 @@ xrt_result_t compositor::layer_commit(xrt_graphics_sync_handle_t sync_handle)
 	};
 
 	trace::instant_feedback("begin", frame.rendering.id, os_monotonic_get_ns());
+	health::frames().compositor_begin(uint64_t(frame.rendering.id), os_monotonic_get_ns());
 
 	cmd_pool.reset();
 	cmd.begin({.flags = vk::CommandBufferUsageFlagBits::eOneTimeSubmit});
@@ -504,6 +508,7 @@ xrt_result_t compositor::layer_commit(xrt_graphics_sync_handle_t sync_handle)
 		r->EndFrameCapture(NULL, NULL);
 #endif
 
+	uint64_t rendering_id = uint64_t(frame.rendering.id);
 	comp_frame_clear_locked(&frame.rendering);
 
 	if (vk.device.waitSemaphores(vk::SemaphoreWaitInfo{
@@ -517,6 +522,7 @@ xrt_result_t compositor::layer_commit(xrt_graphics_sync_handle_t sync_handle)
 	}
 	else
 	{
+		health::frames().compositor_end(rendering_id, os_monotonic_get_ns());
 		auto [res, ts] = query_pool.getResults<uint64_t>(
 		        0,
 		        3,
@@ -647,7 +653,10 @@ void compositor::encoder_work(std::stop_token tok)
 			auto n = ++encode_errors;
 			if (n <= 5 or (n & (n - 1)) == 0)
 				U_LOG_E("Encoder error on stream %d, frame %" PRIu64 " (error #%" PRIu64 "): %s",
-				        int(current_stream), image.frame_index, n, e.what());
+				        int(current_stream),
+				        image.frame_index,
+				        n,
+				        e.what());
 		}
 		image.busy = false;
 	}

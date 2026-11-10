@@ -18,6 +18,8 @@
 
 #include "idr_handler.h"
 
+#include "driver/health_frames.h"
+#include "os/os_time.h"
 #include "util/u_logging.h"
 #include "utils/overloaded.h"
 
@@ -57,6 +59,7 @@ void default_idr_handler::on_feedback(const from_headset::feedback & f)
 			                   {
 				                   U_LOG_W("IDR frame dropped, stream %d", f.stream_index);
 				                   dropped_idr_count.fetch_add(1, std::memory_order_relaxed);
+				                   health::events().push(os_monotonic_get_ns(), "idr_request", "dropped_idr");
 				                   state = need_idr{};
 			                   }
 		                   }
@@ -66,6 +69,7 @@ void default_idr_handler::on_feedback(const from_headset::feedback & f)
 		                   {
 			                   U_LOG_I("IDR frame needed on stream %d", f.stream_index);
 			                   lost_reference_count.fetch_add(1, std::memory_order_relaxed);
+			                   health::events().push(os_monotonic_get_ns(), "idr_request", "lost_reference");
 			                   state = need_idr{};
 		                   }
 	                   },
@@ -90,6 +94,7 @@ bool default_idr_handler::should_skip(uint64_t frame_id)
 		                          {
 			                          U_LOG_W("IDR frame timeout");
 			                          timeout_count.fetch_add(1, std::memory_order_relaxed);
+			                          health::events().push(os_monotonic_get_ns(), "idr_request", "timeout");
 			                          state = need_idr{};
 			                          return false;
 		                          }
