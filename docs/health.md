@@ -6,7 +6,9 @@ GenRobo/GRID#2834.
 
 Frame handling is unchanged: the monitor reads counters the encoder, the IDR handler and the
 application pacer already keep, and the per-frame feedback the headset already sends. One
-thread wakes once per second to do the arithmetic.
+thread wakes once per second to do the arithmetic. The encoders' own five-second log summary
+(`encoder stream N (5 s): presented …`) is gone: the `encoder` object of each sample and the
+connector below carry the same counts once per second.
 
 The headset sends `from_headset::telemetry` once per second while streaming: frames received,
 incomplete, decoded, dropped before display and repeated; decode time p95; its own CPU and GPU
@@ -115,6 +117,11 @@ channel. Configure a sink and keep `health.app-data` on:
 ```json
 { "app-data": [{ "channel": "wivrn-health", "connect": "127.0.0.1:9761" }] }
 ```
+
+Port convention on a GRID PC: the Vivarium backend's camera sink listens on 9760
+(`vivarium-camera`) and its health sink on 9761 (`wivrn-health`, `vivarium-teleop launch
+--health-port`); the GRID link monitor serves `/link-stats` on 9762 and reads the health sink
+through the backend (`GET /sessions/<id>/health`) rather than connecting here itself.
 
 The server connects to the sink as a TCP client while a headset session is active (retrying
 every 2 s) and both sides write UTF-8 JSON lines, one object per line, `\n`-terminated. Unlike
