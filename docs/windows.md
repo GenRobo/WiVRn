@@ -3,7 +3,7 @@
 The server can be built for Windows as a headless console program, `wivrn-server.exe`, together with the OpenXR runtime DLL that applications load.
 
 Compared to Linux:
-- One headset session per process: the server exits when the session ends, start it again for the next one.
+- One process serves any number of headset sessions in turn (see [Session lifetime](#session-lifetime)); `--one-session` restores the old exit-after-the-first-session behaviour.
 - No dashboard, `wivrnctl`, D-Bus interface, application launcher or audio.
 - The service is published with mDNS through Windows' own DNS-SD service instead of Avahi.
 - No input forwarding (uinput): OpenXR controllers and gamepads work, keyboard and mouse forwarding does not.
@@ -59,8 +59,18 @@ wivrn-server.exe --pair
 - `--log-dir <dir>`: the log is also written to `<dir>\wivrn-server-<time>.log`, by default in `%LOCALAPPDATA%\wivrn\logs`.
 - `--no-encrypt`: disable encryption (debug).
 - `--no-publish-service`: do not publish the service with mDNS.
+- `--one-session`: exit when the first headset session ends instead of waiting for the next headset (what the offline test scripts use).
 
-When the session ends the server exits; run it again for the next session.
+### Session lifetime
+
+The server runs until it is stopped with Ctrl-C. Like the Linux server, which forks one Monado process per headset session, it runs one Monado instance (compositor, encoders, OpenXR IPC pipe) per *headset session*, in-process:
+
+- A headset session starts when a headset connects and authenticates (`Client connected`). OpenXR applications can only connect while one is running: without a headset there is no runtime pipe and Chrome reports "VR NOT FOUND".
+- An OpenXR client leaving while the headset stays (the WebXR session ends, Chrome restarts) does not end the session: the stream pauses until the next client connects. The headset keeps its connection.
+- The headset leaving while an OpenXR client is connected pauses the session (`Headset session interrupted … Session paused, waiting for the headset to reconnect`, health event `session_paused`); the same session resumes when it comes back (`Headset connected, Session resumed`, `session_resumed`), with the same capture directory and health log. The app-data relays drop their sink connection on pause and reconnect it on resume.
+- The headset leaving while no OpenXR client is connected ends the session (`No OpenXR client connected, exiting`, `Session ended (0), waiting for the next headset`). The Monado instance and everything it owned are destroyed: the compositor and encoders, the health monitor and its `wivrn-health-*.jsonl`, the capture directory, the app-data relays (their sink connections close) and the application pacers. The server then listens again (`Listening on TCP port 9757`), still published with mDNS, and the next headset gets a fresh instance: a new capture directory, a new health log, new relays that reconnect their sinks, and (with `WIVRN_TRACING=inprocess`) a new trace file.
+- Pairing is one-shot, as on Linux: the PIN printed with `--pair` (or when no headset is known) is consumed by the first headset that pairs. Known headsets reconnect in later sessions without a PIN; an unknown one is refused (`Client not known and pairing is disabled`) and the server keeps listening. Restart with `--pair` to pair another headset.
+- Ctrl-C stops the server in either state; `--one-session` makes it exit when the first session ends.
 
 ### Connecting the headset over USB with adb
 
@@ -129,7 +139,7 @@ Add `--remote-debugging-port=9555` to drive Chrome through the DevTools protocol
 cmake --build build-win --target wivrn-server openxr_wivrn wivrn-handshake-probe
 powershell -ExecutionPolicy Bypass -File tools\windows\encoder-test.ps1 -HelloXr C:\path\to\hello_xr.exe -Encoder nvenc -Seconds 30
 ```
-`-Encoder` is `auto`, `nvenc`, `vulkan`, `x264` or a configuration file; `-Codecs` and `-BitDepth` set what the fake headset advertises. The server listens on port 9757, so no other server may be running. Results are in `build-win\encoder-test-<encoder>`: `probe-<stream>.bin` are the received bitstreams, `server-<stream>.*` the ones the server encoded.
+`-Encoder` is `auto`, `nvenc`, `vulkan`, `x264` or a configuration file; `-Codecs` and `-BitDepth` set what the fake headset advertises. The server listens on port 9757, so no other server may be running (the scripts also kill every `wivrn-server` at the end). They start the server with `--one-session`, so it exits by itself once the fake headset leaves. Results are in `build-win\encoder-test-<encoder>`: `probe-<stream>.bin` are the received bitstreams, `server-<stream>.*` the ones the server encoded.
 
 ## Testing application data channels without a headset
 

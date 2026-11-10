@@ -27,7 +27,7 @@ $env:PATH = (Join-Path $BuildDir "vcpkg_installed\x64-windows\bin") + ";" + $env
 $env:XRT_LOG = "info"
 $env:WIVRN_DUMP_VIDEO = Join-Path $Out "server"
 
-$srvArgs = @("--log-dir", $Out, "--pair")
+$srvArgs = @("--log-dir", $Out, "--pair", "--one-session")
 if ($Encoder -like "*.json") {
     $srvArgs += @("-f", (Resolve-Path $Encoder).Path)
 } elseif ($Encoder -ne "auto") {

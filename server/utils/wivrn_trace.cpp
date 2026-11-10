@@ -54,6 +54,7 @@ namespace
 {
 bool initialized = false;
 bool enabled = false;
+bool inprocess = false; // an in-process session is armed by init() and re-armed per instance
 ::vk_bundle * calibration = nullptr;
 
 perfetto::Track g_encoder_track(1);
@@ -253,7 +254,13 @@ static void propagate_to_monado()
 void init()
 {
 	if (initialized)
+	{
+		// Another instance in the same process (the Windows server runs one Monado instance per
+		// headset session): shutdown() wrote the previous session's trace, arm one for this session.
+		if (inprocess and not g_inproc_session)
+			start_inprocess_session();
 		return;
+	}
 	initialized = true;
 
 	// Monado's marker init caches XRT_TRACING, so propagate_to_monado() must run first.
@@ -270,7 +277,7 @@ void init()
 	enabled = true;
 
 	const bool use_system = mode == tracing_mode::system or mode == tracing_mode::both;
-	const bool use_inprocess = mode == tracing_mode::inprocess or mode == tracing_mode::both;
+	inprocess = mode == tracing_mode::inprocess or mode == tracing_mode::both;
 
 	perfetto::TracingInitArgs args;
 	if (use_system)
@@ -280,7 +287,7 @@ void init()
 			U_LOG_I("wivrn::trace: producer socket %s", std::getenv("PERFETTO_PRODUCER_SOCK_NAME"));
 		args.backends |= perfetto::kSystemBackend;
 	}
-	if (use_inprocess)
+	if (inprocess)
 		args.backends |= perfetto::kInProcessBackend;
 	perfetto::Tracing::Initialize(args);
 	perfetto::TrackEvent::Register();
@@ -297,7 +304,7 @@ void init()
 	set_track_name(g_feedback_track, "WiVRn feedback");
 
 	// The in-process session must be started after Register() so its data source is known.
-	if (use_inprocess)
+	if (inprocess)
 		start_inprocess_session();
 
 	U_LOG_I("wivrn::trace: init complete");

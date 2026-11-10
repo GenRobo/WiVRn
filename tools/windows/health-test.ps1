@@ -35,7 +35,7 @@ $env:XRT_LOG = "info"
 $config = Join-Path $Out "config.json"
 "{ `"encoder`": `"$Encoder`", `"hid-forwarding`": false, `"health`": { `"warnings`": true, `"log`": true, `"app-data`": false } }" | Set-Content -Encoding ascii $config
 
-$srv = Start-Process -FilePath (Join-Path $serverDir "wivrn-server.exe") -ArgumentList @("--log-dir", $Out, "--pair", "-f", $config) -WorkingDirectory $serverDir `
+$srv = Start-Process -FilePath (Join-Path $serverDir "wivrn-server.exe") -ArgumentList @("--log-dir", $Out, "--pair", "--one-session", "-f", $config) -WorkingDirectory $serverDir `
     -RedirectStandardError "$Out\server-stderr.log" -RedirectStandardOutput "$Out\server-stdout.log" -PassThru -NoNewWindow
 $pin = $null
 for ($i = 0; $i -lt 30 -and -not $pin; $i++) {
