@@ -161,7 +161,8 @@ std::optional<warning> link_slow(std::span<const sample> recent, const threshold
 		return std::nullopt;
 	return warning{rule_id::link_slow,
 	               std::format("Network adapter too slow for this bitrate (send {:.1f} ms, receive spread {:.1f} ms). Lower the bitrate or use a different adapter.",
-	                           s.link.send_ms_p95, s.link.receive_spread_ms_p95)};
+	                           s.link.send_ms_p95,
+	                           s.link.receive_spread_ms_p95)};
 }
 
 std::optional<warning> encoder_busy(std::span<const sample> recent, const thresholds & th)
@@ -173,7 +174,7 @@ std::optional<warning> encoder_busy(std::span<const sample> recent, const thresh
 	bool slow = period > 0 and s.encoder.encode_ms_p95 > th.get("encoder_busy.period_ratio") * period;
 	if (not skipped and not util and not slow)
 		return std::nullopt;
-	std::string detail = util ? std::format("{}% busy", s.encoder.util_pct)
+	std::string detail = util   ? std::format("{}% busy", s.encoder.util_pct)
 	                     : slow ? std::format("{:.1f} ms per frame", s.encoder.encode_ms_p95)
 	                            : std::format("{} frames skipped", s.encoder.skipped);
 	return warning{rule_id::encoder_busy, std::format("PC encoder overloaded ({}). Lower the resolution or refresh rate.", detail)};
@@ -346,6 +347,10 @@ std::string to_json_line(const sample & s, std::span<const rule_id> active)
 	j["warnings"] = names;
 	if (not s.app_metrics.empty())
 		j["app_metrics"] = s.app_metrics;
+	if (s.app_metrics_dropped)
+		j["app_metrics_dropped"] = s.app_metrics_dropped;
+	if (not s.app_warnings.empty())
+		j["app_warnings"] = s.app_warnings;
 	return j.dump();
 }
 
@@ -402,7 +407,107 @@ std::optional<sample> from_json_line(std::string_view line)
 		for (auto & [k, v]: it->items())
 			if (v.is_number())
 				s.app_metrics[k] = v.get<double>();
+	get(j, "app_metrics_dropped", s.app_metrics_dropped);
+	if (auto it = j.find("app_warnings"); it != j.end() and it->is_array())
+		for (const auto & v: *it)
+			if (v.is_string())
+				s.app_warnings.push_back(v.get<std::string>());
 	return s;
+}
+
+// --- telemetry connector -----------------------------------------------------------------
+
+namespace
+{
+bool valid_identifier(std::string_view s)
+{
+	if (s.empty() or s.size() > 32)
+		return false;
+	for (char c: s)
+		if (not((c >= 'a' and c <= 'z') or (c >= '0' and c <= '9') or c == '_'))
+			return false;
+	return true;
+}
+
+std::string string_or_empty(const nlohmann::json & o, const char * key)
+{
+	auto it = o.find(key);
+	return it != o.end() and it->is_string() ? it->get<std::string>() : std::string{};
+}
+} // namespace
+
+std::optional<connector_line> parse_connector_line(std::string_view line)
+{
+	if (line.size() > max_connector_line)
+		return std::nullopt;
+	nlohmann::json j = nlohmann::json::parse(line, nullptr, false);
+	if (j.is_discarded() or not j.is_object())
+		return std::nullopt;
+	auto type = string_or_empty(j, "type");
+	if (type == "metric")
+	{
+		connector_line out{.kind = connector_line::kind::metric, .name = string_or_empty(j, "name")};
+		auto value = j.find("value");
+		if (not valid_identifier(out.name) or value == j.end() or not value->is_number())
+			return std::nullopt;
+		out.value = value->get<double>();
+		if (not std::isfinite(out.value))
+			return std::nullopt;
+		return out;
+	}
+	if (type == "warning")
+	{
+		connector_line out{.kind = connector_line::kind::warning, .name = string_or_empty(j, "id"), .message = string_or_empty(j, "message")};
+		if (not valid_identifier(out.name) or out.message.empty() or out.message.size() > 200)
+			return std::nullopt;
+		if (auto ttl = j.find("ttl_s"); ttl != j.end())
+		{
+			if (not ttl->is_number())
+				return std::nullopt;
+			out.ttl_s = int(std::clamp(ttl->get<double>(), 1.0, 600.0));
+		}
+		return out;
+	}
+	return std::nullopt;
+}
+
+bool app_warning_state::fire(const std::string & id, int ttl_s, int64_t t)
+{
+	auto it = entries.find(id);
+	if (it != entries.end() and t < it->second.refire_t)
+		return false;
+	if (it == entries.end() and entries.size() >= max_entries)
+		return false;
+	entries[id] = {.until_t = t + ttl_s, .refire_t = t + std::max(ttl_s, cooldown_s), .listed = true};
+	return true;
+}
+
+std::vector<std::string> app_warning_state::expire(int64_t t)
+{
+	std::vector<std::string> expired;
+	for (auto it = entries.begin(); it != entries.end();)
+	{
+		auto & e = it->second;
+		if (e.listed and t >= e.until_t)
+		{
+			e.listed = false;
+			expired.push_back(it->first);
+		}
+		if (not e.listed and t >= e.refire_t)
+			it = entries.erase(it);
+		else
+			++it;
+	}
+	return expired;
+}
+
+std::vector<std::string> app_warning_state::active() const
+{
+	std::vector<std::string> ids;
+	for (const auto & [id, e]: entries)
+		if (e.listed)
+			ids.push_back(id);
+	return ids;
 }
 
 } // namespace wivrn::health

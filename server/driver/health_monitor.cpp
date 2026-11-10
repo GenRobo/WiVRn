@@ -13,7 +13,6 @@
 #include <ctime>
 #include <format>
 #include <nlohmann/json.hpp>
-#include <regex>
 
 #ifdef _WIN32
 #include <windows.h>
@@ -252,36 +251,36 @@ void health_monitor::write_line(const std::string & line)
 		on_line(line);
 }
 
+void health_monitor::on_connector_data(std::string_view data)
+{
+	connector_buffer.feed(data, [this](std::string_view line) { on_connector_line(line); });
+}
+
 void health_monitor::on_connector_line(std::string_view line)
 {
-	static const std::regex ident("^[a-z0-9_]{1,32}$");
-	nlohmann::json j = nlohmann::json::parse(line, nullptr, false);
-	auto type = j.is_object() ? j.value("type", "") : "";
-	if (type == "metric")
+	auto parsed = health::parse_connector_line(line);
+	if (not parsed)
 	{
-		auto name = j.value("name", "");
-		if (std::regex_match(name, ident) and j.contains("value") and j["value"].is_number())
-		{
-			std::lock_guard lock(mutex);
-			connector_metrics[name] = j["value"].get<double>();
-			return;
-		}
+		std::lock_guard lock(mutex);
+		connector_dropped++;
+		return;
 	}
-	else if (type == "warning")
+	if (parsed->kind == health::connector_line::kind::metric)
 	{
-		auto id = j.value("id", "");
-		auto message = j.value("message", "");
-		if (std::regex_match(id, ident) and not message.empty() and message.size() <= 200)
-		{
-			if (options.warnings and send)
-				send(message, true);
-			if (on_line)
-				on_line(nlohmann::json{{"type", "warning"}, {"id", id}, {"state", "fired"}, {"message", message}, {"source", "app"}}.dump());
-			return;
-		}
+		std::lock_guard lock(mutex);
+		connector_metrics[parsed->name] = parsed->value;
+		return;
 	}
-	std::lock_guard lock(mutex);
-	invalid_connector_lines++;
+	int64_t t = unix_now_s();
+	{
+		std::lock_guard lock(mutex);
+		if (not app_warnings.fire(parsed->name, parsed->ttl_s, t))
+			return; // within its ttl or the cooldown: the headset already shows it
+	}
+	U_LOG_W("Stream health: app warning %s: %s", parsed->name.c_str(), parsed->message.c_str());
+	if (options.warnings and send)
+		send(parsed->message, true);
+	write_line(nlohmann::json{{"t", t}, {"type", "warning"}, {"id", parsed->name}, {"state", "fired"}, {"message", parsed->message}, {"source", "app"}}.dump());
 }
 
 health::sample health_monitor::last_sample() const
@@ -342,6 +341,9 @@ health::sample health_monitor::collect(int64_t now_unix_s)
 		fb.repeated = 0;
 		s.app_metrics = std::move(connector_metrics);
 		connector_metrics.clear();
+		s.app_metrics_dropped = connector_dropped;
+		connector_dropped = 0;
+		s.app_warnings = app_warnings.active();
 	}
 
 	if (fill)
@@ -425,7 +427,15 @@ void health_monitor::run(std::stop_token stop)
 		if (stop.stop_requested())
 			break;
 
-		health::sample s = collect(unix_now_s());
+		int64_t now = unix_now_s();
+		std::vector<std::string> expired;
+		{
+			std::lock_guard lock(mutex);
+			expired = app_warnings.expire(now);
+		}
+		for (const auto & id: expired)
+			write_line(nlohmann::json{{"t", now}, {"type", "warning"}, {"id", id}, {"state", "cleared"}, {"source", "app"}}.dump());
+		health::sample s = collect(now);
 		s.encoder.util_pct = nvml.read();
 		if (not primed)
 		{

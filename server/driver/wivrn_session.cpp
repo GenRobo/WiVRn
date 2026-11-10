@@ -331,6 +331,17 @@ wivrn::wivrn_session::wivrn_session(std::unique_ptr<wivrn_connection> connection
 			U_LOG_E("app-data %s: cannot create relay: %s", sink.channel.c_str(), e.what());
 		}
 	}
+	// Telemetry connector (GRID #2834 M4): the monitor's lines go to the wivrn-health sink, and
+	// what the sink writes (application warnings and metrics) goes to the monitor, not the headset.
+	if (conf.health.app_data)
+	{
+		auto relay = std::ranges::find_if(app_data_relays, [](const auto & r) { return r->channel() == health_monitor::connector_channel; });
+		if (relay != app_data_relays.end())
+		{
+			(*relay)->on_sink_data = [this](std::string_view data) { health->on_connector_data(data); };
+			health->on_line = [relay = relay->get()](const std::string & line) { relay->from_server(line + '\n'); };
+		}
+	}
 }
 
 wivrn_session::~wivrn_session()

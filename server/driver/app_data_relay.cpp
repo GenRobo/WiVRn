@@ -140,6 +140,16 @@ void app_data_relay::pause()
 
 void app_data_relay::from_headset(std::vector<uint8_t> && data)
 {
+	enqueue(std::move(data));
+}
+
+void app_data_relay::from_server(std::string_view data)
+{
+	enqueue(std::vector<uint8_t>(data.begin(), data.end()));
+}
+
+void app_data_relay::enqueue(std::vector<uint8_t> && data)
+{
 	std::lock_guard lock(mutex);
 	if (not connected)
 	{
@@ -352,18 +362,26 @@ void app_data_relay::serve(std::stop_token stop, TCP & tcp)
 					continue;
 				throw socket_error();
 			}
-			try
+			if (on_sink_data)
 			{
-				session.send_control(to_headset::app_data{
-				        .channel = sink.channel,
-				        .data = std::vector<uint8_t>(buffer.begin(), buffer.begin() + n),
-				});
+				on_sink_data(std::string_view((const char *)buffer.data(), n));
 				bytes_to_headset += n;
 			}
-			catch (const std::exception &)
+			else
 			{
-				// The session's network thread reports the headset failure and pauses the relay
-				bytes_dropped += n;
+				try
+				{
+					session.send_control(to_headset::app_data{
+					        .channel = sink.channel,
+					        .data = std::vector<uint8_t>(buffer.begin(), buffer.begin() + n),
+					});
+					bytes_to_headset += n;
+				}
+				catch (const std::exception &)
+				{
+					// The session's network thread reports the headset failure and pauses the relay
+					bytes_dropped += n;
+				}
 			}
 		}
 		else if (fds[0].revents & (POLLERR | POLLHUP))

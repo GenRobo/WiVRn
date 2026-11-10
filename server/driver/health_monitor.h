@@ -61,9 +61,13 @@ public:
 	/// Sends the last sample to the headset for its statistics tab; set by the session.
 	std::function<void(const to_headset::health &)> send_health;
 
-	/// A line received on the telemetry connector (milestone 4): warnings and metrics from
-	/// applications. Invalid lines are counted and ignored.
-	void on_connector_line(std::string_view line);
+	/// The app-data channel the telemetry connector uses (milestone 4).
+	static constexpr std::string_view connector_channel = "wivrn-health";
+
+	/// Bytes received from the connector sink, on the relay thread: split into lines, each a
+	/// warning or a metric from an application (health::parse_connector_line). Invalid lines
+	/// are counted in the sample (`app_metrics_dropped`) and dropped.
+	void on_connector_data(std::string_view data);
 
 	/// The most recent sample, for the connector and the stats tab.
 	health::sample last_sample() const;
@@ -113,8 +117,12 @@ private:
 
 	std::ofstream jsonl;
 	int64_t started_unix_s = 0;
-	uint32_t invalid_connector_lines = 0;
+	// Connector state: written on the relay thread, read by collect() under mutex.
+	health::connector_line_buffer connector_buffer; // relay thread only
+	uint32_t connector_dropped = 0;
 	std::map<std::string, double> connector_metrics;
+	health::app_warning_state app_warnings;
+	void on_connector_line(std::string_view line);
 	std::atomic<bool> paused{false};
 	std::optional<from_headset::telemetry> last_telemetry; // under mutex
 	bool telemetry_fresh = false;                          // set by on_telemetry, cleared by collect
