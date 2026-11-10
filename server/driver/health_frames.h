@@ -74,6 +74,8 @@ struct frame_header
 /// The JSON lines of the record; every time becomes whole microseconds since t0, unknown is null.
 std::string frame_line(const frame_row &, int64_t t0_mono_ns);
 std::string frame_header_line(const frame_header &);
+/// `off_ns` is the current headset − server offset (frame_row::no_offset before the first
+/// feedback: both fields null), `jitter_ns` its max − min over the second.
 std::string frame_clock_line(int64_t t_ns, int64_t t0_mono_ns, int64_t off_ns, int64_t jitter_ns);
 /// `value` is any JSON value (string, number, bool) or null when the event carries none.
 std::string frame_event_line(int64_t t_ns, int64_t t0_mono_ns, std::string_view name, const nlohmann::json & value);
@@ -189,5 +191,58 @@ private:
 	std::vector<event> pending;
 };
 frame_events & events();
+
+/// Serialises finished rows of a ring to `wivrn-frames-<stamp>.jsonl` in `dir`, rotating at
+/// `max_bytes` and keeping at most `keep` files (0: never deletes). Monitor thread only; the
+/// clock is injected.
+class frame_writer
+{
+public:
+	/// A row is finished when the headset displayed a frame three beyond it on that stream (its
+	/// three-deep frame buffer has released it, so the repeat count is final) or this long after
+	/// its predicted display time without that.
+	static constexpr int64_t settle_ns = 2'000'000'000;
+
+	frame_writer(std::filesystem::path dir, size_t max_bytes, int keep, std::function<std::string()> stamp);
+	~frame_writer();
+	frame_writer(const frame_writer &) = delete;
+	frame_writer & operator=(const frame_writer &) = delete;
+
+	/// Opens the first file and writes the header; rows before t0 are not written.
+	void start(const frame_ring &, const frame_header &);
+	bool started() const
+	{
+		return t0 != 0;
+	}
+	/// Writes every row finished at `now_ns`, then a clock line.
+	void tick(const frame_ring &, int64_t now_ns, int64_t off_ns, int64_t jitter_ns);
+	void event(int64_t t_ns, std::string_view name, const nlohmann::json & value);
+
+	/// Every line written also goes here, when set (the telemetry connector).
+	std::function<void(const std::string &)> on_line;
+	/// Files written this session, oldest first, after deletions.
+	const std::vector<std::filesystem::path> & files() const
+	{
+		return paths;
+	}
+	/// The file currently open.
+	std::filesystem::path current() const;
+
+private:
+	void write(const std::string & line);
+	void open();
+
+	std::filesystem::path dir;
+	size_t max_bytes;
+	int keep;
+	std::function<std::string()> stamp;
+	std::ofstream out;
+	size_t written = 0;
+	std::vector<std::filesystem::path> paths;
+	std::string header;
+	int64_t t0 = 0;
+	uint8_t stream_count = 0;
+	std::array<int64_t, frame_ring::streams> next_n{};
+};
 
 } // namespace wivrn::health

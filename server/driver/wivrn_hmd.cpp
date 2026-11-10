@@ -18,6 +18,7 @@
  */
 
 #include "wivrn_hmd.h"
+#include "health_frames.h"
 #include "os/os_time.h"
 #include "wivrn_config.h"
 #include "wivrn_session.h"
@@ -185,6 +186,9 @@ xrt_result_t wivrn_hmd::get_view_poses(const xrt_vec3 * default_eye_relation,
 	auto target_ns = std::min(now + max_extrapolation_ns, at_timestamp_ns);
 	auto [production_timestamp, view] = views.get_at(target_ns);
 	cnx->add_tracking_request(device_id::HEAD, at_timestamp_ns, production_timestamp, now);
+	// Frame record (GRID #3095): `at_timestamp_ns` is the display time xrWaitFrame predicted for
+	// the application's frame; the pacer joins it to the system frame when the frame is latched.
+	health::frames().view_pose(at_timestamp_ns, production_timestamp, uint32_t(view.flags));
 
 	int flags = view.relation.relation_flags;
 

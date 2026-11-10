@@ -33,6 +33,9 @@ still shows those as before.
 		"warnings": true,
 		"log": true,
 		"app-data": true,
+		"frames": false,
+		"frames-max-mb": 50,
+		"frames-keep": 3,
 		"log-dir": "/var/tmp/wivrn",
 		"thresholds": { "link_loss.frames_per_s": 5, "app_slow.ratio": 0.9 }
 	}
@@ -44,7 +47,10 @@ still shows those as before.
 | `warnings` | `true` | Send a toast to the headset when a rule fires, and *Stream recovered* when all clear |
 | `log` | `true` | Write the flight record (below) |
 | `app-data` | `true` | Speak the [connector](#connector) protocol on the `wivrn-health` app-data channel, when one is configured |
-| `log-dir` | `%LOCALAPPDATA%\wivrn\logs` on Windows, `$XDG_STATE_HOME/wivrn` or `~/.local/state/wivrn` elsewhere | Where the record goes |
+| `frames` | `false` | Write the [frame record](#frame-record): one line per application frame per stream (`vivarium-teleop xr up --trace-light`, GRID#3095) |
+| `frames-max-mb` | `50` | Rotate the frame record at this size |
+| `frames-keep` | `3` | Frame record files kept per server run, the oldest deleted first; `0` keeps every file (`vivarium-teleop xr up --trace` sets this, so the file it names outlives a long session) |
+| `log-dir` | `%LOCALAPPDATA%\wivrn\logs` on Windows, `$XDG_STATE_HOME/wivrn` or `~/.local/state/wivrn` elsewhere | Where the records go |
 | `thresholds` | see below | `"<rule>.<param>": number` overrides; unknown keys are ignored |
 
 ## Rules
@@ -102,8 +108,9 @@ a competing browser dropped the application from 120 Hz to 66–82 Hz.
   connector stream (below); the file holds them too, so a reader must look at `type`.
 
 When a rule fires, `wivrn-health-event-<time>.json` is written with the sample and the last
-600 per-frame timelines per stream (`columns` names the fields; timestamps are the headset's
-clock in nanoseconds), so the seconds before the event can be inspected frame by frame.
+600 frames per stream from the [frame record](#frame-record)'s ring (`streams[s]` is a list of
+`frame` objects, times relative to `t0_mono_ns`), so the seconds before the event can be
+inspected frame by frame whether or not the frame record is on.
 
 Reading a record with Python:
 
@@ -111,6 +118,90 @@ Reading a record with Python:
 import json, statistics
 rows = [json.loads(l) for l in open("wivrn-health-20261030-154559.jsonl")]
 print(statistics.median(r["motion_to_photon_ms_p95"] for r in rows))
+```
+
+## Frame record
+
+With `health.frames` on, every application frame leaves one line per video stream in
+`wivrn-frames-<time>.jsonl` (same directory as the flight record), the input of
+`vivarium-teleop xr trace` (GRID#3095). The file opens when a headset session starts and
+closes when it ends; it rotates at `frames-max-mb` (a new `wivrn-frames-<time>.jsonl`, the
+oldest beyond `frames-keep` deleted; `frames-keep: 0` deletes nothing). At 72 Hz with two
+streams 50 MB is about nine minutes. UTF-8, one JSON object per line, LF.
+
+The first line is the header:
+
+```json
+{"type":"header","version":1,"t0_mono_ns":123456789012,"t0_unix_ms":1794270000123,"host":"GRGeordieUbuntuLaptop","server":"26.9-45-gd09ec1f9","streams":2,"display_hz":72.0,"period_ns":13888888}
+```
+
+Then one `frame` line per application frame per stream (`s` < `streams`), written once the
+headset has displayed a frame three beyond it on that stream (its three-deep frame buffer has
+released it, so the repeat count is final) or 2 s after its predicted display time without
+that, whichever comes first; a row is never written twice, feedback arriving after it is dropped:
+
+```json
+{"type":"frame","n":18221,"s":0,"pd":2217133,"wake":2203280,"begin":2203310,"submit":2205100,"gpu":2205900,"comp0":2206000,"comp1":2207200,"enc0":2207250,"enc1":2210800,"send0":2210850,"send1":2211400,"rx0":2212100,"rx1":2213300,"dec0":2213350,"dec1":2217000,"blit":2217050,"disp":2217140,"shown":1,"bytes":41230,"idr":0,"shards":31,"lost":0,"pose_t":2202900,"pose_flags":15,"off_us":1170.5}
+```
+
+- Every time is **server monotonic microseconds since `t0_mono_ns`**, a whole number.
+  Headset-side times (`rx0`, `rx1`, `dec0`, `dec1`, `blit`, `disp`) are converted with the
+  session's clock offset before the subtraction. A value that is not known is `null`, never
+  `-1`, never omitted.
+- `n` is the compositor's frame index (the one the encoder and the headset's feedback use),
+  `s` the stream, `pd` the predicted display time.
+- `wake`, `begin`, `submit`: the application woke from `xrWaitFrame`, called `xrBeginFrame`,
+  called `xrEndFrame`; `gpu`: its GPU work finished. These are the application frame the
+  compositor latched into frame `n`; when the application has not delivered a new one, the
+  previous frame is latched again and the row repeats its application timings.
+- `comp0`, `comp1`: the compositor started and its GPU work (layer squash, foveation) finished.
+- `enc0`, `enc1`: encode begin and end; `send0`, `send1`: first and last shard sent; `bytes`
+  the encoded size, `shards` the shards sent, `idr` 1 when the frame went on the reliable
+  socket (every encoder's IDR frames).
+- `rx0`, `rx1`: the headset received the first and last packet; `dec0`, `dec1`: sent to and
+  received from its decoder; `blit`, `disp`: composed and displayed; `shown` the times it was
+  displayed (0 = never, a frame dropped before display); `lost` 0 when the headset decoded the
+  frame, `null` when it reported it incomplete (the feedback packet does not carry a count).
+- `pose_t`: the tracking sample the application's view pose for this frame came from;
+  `pose_flags`: the `XrViewStateFlags` of that pose (bit 0 orientation valid, bit 1 position
+  valid, bit 2 orientation tracked, bit 3 position tracked; 0 = no pose). `null` when the
+  application did not locate its views for this frame's display time.
+- `off_us`: the clock-offset estimate (headset monotonic time minus server monotonic time) in
+  microseconds when the feedback arrived. It is the whole offset, hundreds of seconds when the
+  two booted at different times (824 394 750.7 on the 2026-11-10 laptop run); what matters is
+  its change over the file, the drift between the two clocks (32 µs/s there).
+
+Once per second a `clock` line records the same offset (`off_us`, `null` before the first
+feedback) and `jitter_us`, the spread (max − min) of the estimate over that second; session
+events are `event` lines; `value` is a string, a number, a boolean or `null`:
+
+```json
+{"type":"clock","t":5000000,"off_us":1170.5,"jitter_us":42.0}
+{"type":"event","t":1500,"name":"session_state","value":"FOCUSED"}
+```
+
+| `name` | `value` |
+| --- | --- |
+| `session_state` | the `XrSessionState` without its prefix (`VISIBLE`, `FOCUSED`, `STOPPING`, …) |
+| `idr_request` | why the encoder was asked for an IDR: `lost_reference`, `dropped_idr`, `timeout` |
+| `bitrate` | the new bitrate in bit/s |
+| `recenter` | `null` |
+| `warning` | `"<rule> fired"` or `"<rule> cleared"` |
+| `interaction_profile` | the left and right profiles, space separated |
+| `user_presence` | `true` / `false` |
+| `display_hz` | the new refresh rate (the header carries the initial one) |
+| `pause`, `resume` | `null` (the headset went away and came back) |
+
+Frame paths only store into a fixed ring of 4096 frames (relaxed atomic stores, no allocation,
+no lock); the monitor thread serialises finished rows once per second. The same lines go out on
+the [connector](#connector) when `health.app-data` is on.
+
+```python
+import json
+rows = [json.loads(l) for l in open("wivrn-frames-20261110-154559.jsonl")]
+header, frames = rows[0], [r for r in rows if r["type"] == "frame" and r["s"] == 0]
+late = [f for f in frames if f["disp"] and f["disp"] - f["pd"] > header["period_ns"] / 2000]
+print(len(late), "frames displayed more than half a period late")
 ```
 
 ## Connector
@@ -141,8 +232,8 @@ Each line has a `type`:
 | --- | --- | --- |
 | `sample` | once per second | the [flight record](#flight-record) object, plus `"session":"paused"` while the headset is away |
 | `warning` | a rule or an application warning changes state | `t`, `id` (rule name or application id), `state` (`fired`/`cleared`), `message` (when fired), `source: "app"` for application warnings |
-| `event` | session lifecycle | `t`, `event` (`session_paused`, `session_resumed`) |
-| `frame` | reserved | per-frame timelines, GRID#3095 milestone 6a; not sent yet, readers must skip unknown types |
+| `event` | session lifecycle | `t` (unix seconds), `event` (`session_paused`, `session_resumed`) |
+| `header`, `frame`, `clock`, `event` | with `health.frames` on | the [frame record](#frame-record) lines, unchanged: a frame-record `event` has `name` and `value` and its `t` is microseconds since the header's `t0_mono_ns`; the lifecycle `event` above has `event` and a unix `t` |
 
 ```json
 {"t":1761866000,"type":"sample","link":{...},"headset":{...},"encoder":{...},"app":{...},"motion_to_photon_ms_p95":26.5,"warnings":["link_loss"],"app_metrics":{"sim_realtime_ratio":0.6}}
@@ -186,6 +277,7 @@ for line in conn.makefile():
 ## Testing
 
 `cmake -DWIVRN_BUILD_TEST=ON` adds `wivrn-health-test` (the rules replayed over recorded
-sessions in `server/tests/health_fixtures/`) and, on Windows, `tools/windows/health-test.ps1`
-(server, `hello_xr` and the fake headset dropping frames; expects the toast and the record).
-Run them with `ctest -R health`.
+sessions in `server/tests/health_fixtures/`), `wivrn-health-frames-test` (the frame record:
+ring to JSON line round trip, rotation, the 2 s settle, nothing before the record starts) and,
+on Windows, `tools/windows/health-test.ps1` (server, `hello_xr` and the fake headset dropping
+frames; expects the toast and the record). Run them with `ctest -R health`.

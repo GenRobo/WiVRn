@@ -109,6 +109,7 @@ private:
 
 	std::ofstream video_dump;
 	uint64_t video_dump_offset = 0;
+	uint32_t frame_bytes = 0; // encoded size of the frame being sent (frame record, GRID #3095)
 
 	// Mixed-reality capture (GRID #2837): the frame sidecar next to the dump. Filled in encode(),
 	// written at the end of the frame in SendData, on the same thread as the dump.

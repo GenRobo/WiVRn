@@ -32,6 +32,7 @@
 
 #include "main/comp_compositor.h"
 
+#include <algorithm>
 #include <array>
 #include <atomic>
 #include <memory>
@@ -184,6 +185,12 @@ public:
 	float get_framerate() const
 	{
 		return frame_rate;
+	}
+
+	/// Encoded video streams: two eyes, three with the alpha stream (frame record, GRID #3095).
+	uint8_t stream_count() const
+	{
+		return uint8_t(std::ranges::count_if(encoders, [](const auto & e) { return bool(e); }));
 	}
 	void set_framerate(float hz);
 

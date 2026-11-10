@@ -146,6 +146,7 @@ wivrn::wivrn_session::wivrn_session(std::unique_ptr<wivrn_connection> connection
 	health = std::make_unique<health_monitor>(
 	        conf.health,
 	        health_monitor::default_log_dir(),
+	        compositor.stream_count(),
 	        [this](const std::string & message, bool urgent) {
 		        // Warnings get their own view-locked amber layer on the headset; recovery is a quiet toast.
 		        send_control(to_headset::server_message{
@@ -581,7 +582,11 @@ void wivrn_session::operator()(const from_headset::settings_changed & settings)
 	*this->settings.lock() = settings;
 
 	if (settings.bitrate_bps != 0)
+	{
 		compositor.set_bitrate(settings.bitrate_bps);
+		if (health)
+			health->on_event("bitrate", settings.bitrate_bps);
+	}
 
 	if (settings.preferred_refresh_rate != 0)
 		compositor.set_framerate(settings.preferred_refresh_rate / settings.fps_divider);
@@ -670,6 +675,8 @@ void wivrn_session::operator()(const from_headset::tracking & tracking)
 		        std::string(magic_enum::enum_name(left)).c_str(),
 		        std::string(magic_enum::enum_name(roles.right_profile)).c_str(),
 		        std::string(magic_enum::enum_name(right)).c_str());
+		if (health)
+			health->on_event("interaction_profile", std::string(magic_enum::enum_name(left)) + " " + std::string(magic_enum::enum_name(right)));
 		std::lock_guard lock(roles_mutex);
 
 		// don't change role when hand from other driver is used
@@ -718,6 +725,8 @@ void wivrn_session::operator()(const from_headset::tracking & tracking)
 		U_LOG_I("recentering requested");
 		if (XRT_SUCCESS != xrt_space_overseer_recenter_local_spaces(space_overseer))
 			U_LOG_W("failed to recenter local spaces");
+		if (health)
+			health->on_event("recenter", nullptr);
 	}
 
 	auto offset = offset_est.get_offset();
@@ -872,7 +881,7 @@ void wivrn_session::operator()(from_headset::feedback && feedback)
 		return;
 	compositor.on_feedback(feedback, o);
 	if (health)
-		health->on_feedback(feedback);
+		health->on_feedback(feedback, o);
 
 	if (feedback.received_first_packet)
 		trace::instant_feedback("receive_begin", o.from_headset(feedback.received_first_packet), feedback.frame_index, feedback.stream_index);
@@ -915,6 +924,12 @@ void wivrn_session::operator()(from_headset::visibility_mask_changed && mask)
 void wivrn_session::operator()(from_headset::session_state_changed && event)
 {
 	U_LOG_I("Session state changed: %s", xr::to_string(event.state));
+	if (health)
+	{
+		// "XR_SESSION_STATE_FOCUSED" -> "FOCUSED"
+		std::string_view name = xr::to_string(event.state);
+		health->on_event("session_state", std::string(name.substr(name.starts_with("XR_SESSION_STATE_") ? 17 : 0)));
+	}
 	bool visible, focused;
 	switch (event.state)
 	{
@@ -938,6 +953,8 @@ void wivrn_session::operator()(from_headset::user_presence_changed && event)
 {
 	clock_offset o = offset_est.get_offset();
 	U_LOG_I("user presence changed to %s", event.present ? "true" : "false");
+	if (health)
+		health->on_event("user_presence", event.present);
 	hmd.update_presence(event.present, o ? o.from_headset(event.change_time) : os_monotonic_get_ns());
 }
 
@@ -1096,6 +1113,8 @@ void wivrn_session::operator()(to_monado::disconnect &&)
 void wivrn_session::operator()(to_monado::set_bitrate && data)
 {
 	compositor.set_bitrate(data.bitrate_bps);
+	if (health)
+		health->on_event("bitrate", data.bitrate_bps);
 }
 
 void wivrn_session::operator()(to_headset::stream_tab_change && data)

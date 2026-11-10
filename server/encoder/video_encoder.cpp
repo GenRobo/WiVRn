@@ -22,6 +22,8 @@
 
 #include "video_encoder.h"
 
+#include "driver/health_frames.h"
+
 #include "encoder_settings.h"
 #include "os/os_time.h"
 #include "utils/wivrn_trace.h"
@@ -239,8 +241,11 @@ void video_encoder::on_feedback(const from_headset::feedback & feedback)
 	static std::atomic<int> logged[3];
 	if (logged[stream_idx % 3].fetch_add(1) < 5)
 		U_LOG_I("feedback stream %d frame %" PRIu64 ": received_last_packet %s, sent_to_decoder %s, displayed %s",
-		        int(stream_idx), feedback.frame_index,
-		        feedback.received_last_packet ? "yes" : "no", feedback.sent_to_decoder ? "yes" : "no", feedback.displayed ? "yes" : "no");
+		        int(stream_idx),
+		        feedback.frame_index,
+		        feedback.received_last_packet ? "yes" : "no",
+		        feedback.sent_to_decoder ? "yes" : "no",
+		        feedback.displayed ? "yes" : "no");
 	idr->on_feedback(feedback);
 }
 
@@ -273,7 +278,8 @@ void video_encoder::present_image(vk::Image y_cbcr, vk::SemaphoreSubmitInfo info
 		// frame (feedback.sent_to_decoder); make a stall visible instead of silent.
 		if (++consecutive_skips == 72)
 			U_LOG_W("encoder stream %d: no headset acknowledgement for 72 frames, encoding paused until feedback arrives (frame %" PRIu64 ")",
-			        int(stream_idx), frame_index);
+			        int(stream_idx),
+			        frame_index);
 		state[present_slot] = skip;
 		return;
 	}
@@ -311,6 +317,7 @@ void video_encoder::encode(wivrn_session & cnx,
 
 	wivrn::trace::scope trace_encode(wivrn::trace::cpu_track::encoder, stream_idx, frame_index, "encode");
 	auto encode_begin = os_monotonic_get_ns();
+	health::frames().encode_begin(frame_index, stream_idx, encode_begin);
 	timing_info = {
 	        .encode_begin = clock.to_headset(encode_begin),
 	};
@@ -337,7 +344,9 @@ void video_encoder::encode(wivrn_session & cnx,
 	auto data = encode(encode_slot, frame_index);
 	if (data)
 	{
-		timing_info.encode_end = clock.to_headset(os_monotonic_get_ns());
+		auto encode_end = os_monotonic_get_ns();
+		health::frames().encode_end(frame_index, stream_idx, encode_end);
+		timing_info.encode_end = clock.to_headset(encode_end);
 		assert(shared_sender);
 		shared_sender->push(std::move(*data));
 	}
@@ -350,20 +359,28 @@ void video_encoder::SendData(std::span<uint8_t> data, bool end_of_frame, bool co
 	{
 		// One SendData call per NAL; span the whole frame, not each call.
 		wivrn::trace::cpu_begin(wivrn::trace::cpu_track::network, stream_idx, shard.frame_idx, "SendData");
-		timing_info.send_begin = clock.to_headset(os_monotonic_get_ns());
+		auto now = os_monotonic_get_ns();
+		health::frames().send_begin(shard.frame_idx, stream_idx, now);
+		timing_info.send_begin = clock.to_headset(now);
 		capture_frame.byte_offset = video_dump_offset;
+		frame_bytes = 0;
 	}
 	if (video_dump)
 	{
 		video_dump.write((char *)data.data(), data.size());
 		video_dump_offset += data.size();
 	}
+	frame_bytes += uint32_t(data.size());
 	if (end_of_frame)
 	{
 		auto now = os_monotonic_get_ns();
 		timing_info.send_end = clock.to_headset(now);
 		if (not timing_info.encode_end)
+		{
+			// Synchronous encoders (x264) have no encode_end of their own.
 			timing_info.encode_end = timing_info.send_end;
+			health::frames().encode_end(shard.frame_idx, stream_idx, now);
+		}
 		if (capture_log)
 		{
 			capture_frame.send_end_host_ns = now;
@@ -404,7 +421,11 @@ void video_encoder::SendData(std::span<uint8_t> data, bool end_of_frame, bool co
 		begin = next;
 	}
 	if (end_of_frame)
+	{
 		wivrn::trace::cpu_end(wivrn::trace::cpu_track::network, stream_idx, shard.frame_idx, "SendData");
+		// `control` is the reliable socket, which every encoder asks for exactly on its IDR frames.
+		health::frames().send_end(shard.frame_idx, stream_idx, os_monotonic_get_ns(), frame_bytes, shard.shard_idx, control);
+	}
 }
 
 } // namespace wivrn

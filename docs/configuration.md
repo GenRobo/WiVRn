@@ -152,11 +152,11 @@ the probes and the recoveries under `app`.
 ```
 
 ## `health`
-Default value: all on
+Default value: all on, frame record off
 
-Stream health monitor: in-headset warnings and a per-second flight record. See
-[health.md](health.md) for the keys (`warnings`, `log`, `app-data`, `log-dir`, `thresholds`),
-the rules and the record format.
+Stream health monitor: in-headset warnings, a per-second flight record and, on request, a
+per-frame record. See [health.md](health.md) for the keys (`warnings`, `log`, `app-data`,
+`frames`, `frames-max-mb`, `frames-keep`, `log-dir`, `thresholds`), the rules and the record formats.
 
 ### Example
 ```json
