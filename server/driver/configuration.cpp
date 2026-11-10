@@ -258,6 +258,12 @@ configuration::configuration()
 					throw std::runtime_error("health.frames-max-mb must be a number >= 1");
 				health.frames_max_mb = m->get<uint32_t>();
 			}
+			if (auto k = it->find("frames-keep"); k != it->end())
+			{
+				if (not k->is_number_integer() or k->get<int64_t>() < 0)
+					throw std::runtime_error("health.frames-keep must be an integer >= 0");
+				health.frames_keep = k->get<uint32_t>();
+			}
 			if (auto d = it->find("log-dir"); d != it->end())
 				health.log_dir = d->get<std::string>();
 			if (auto t = it->find("thresholds"); t != it->end() and t->is_object())

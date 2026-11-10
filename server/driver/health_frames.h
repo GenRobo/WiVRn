@@ -193,17 +193,17 @@ private:
 frame_events & events();
 
 /// Serialises finished rows of a ring to `wivrn-frames-<stamp>.jsonl` in `dir`, rotating at
-/// `max_bytes` and keeping at most `keep` files. Monitor thread only; the clock is injected.
+/// `max_bytes` and keeping at most `keep` files (0: never deletes). Monitor thread only; the
+/// clock is injected.
 class frame_writer
 {
 public:
-	static constexpr int keep = 3;
 	/// A row is finished when the headset displayed a frame three beyond it on that stream (its
 	/// three-deep frame buffer has released it, so the repeat count is final) or this long after
 	/// its predicted display time without that.
 	static constexpr int64_t settle_ns = 2'000'000'000;
 
-	frame_writer(std::filesystem::path dir, size_t max_bytes, std::function<std::string()> stamp);
+	frame_writer(std::filesystem::path dir, size_t max_bytes, int keep, std::function<std::string()> stamp);
 	~frame_writer();
 	frame_writer(const frame_writer &) = delete;
 	frame_writer & operator=(const frame_writer &) = delete;
@@ -234,6 +234,7 @@ private:
 
 	std::filesystem::path dir;
 	size_t max_bytes;
+	int keep;
 	std::function<std::string()> stamp;
 	std::ofstream out;
 	size_t written = 0;

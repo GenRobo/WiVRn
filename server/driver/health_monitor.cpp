@@ -140,7 +140,7 @@ health_monitor::health_monitor(configuration::health_options options_, std::file
 	frames_t0_ns = os_monotonic_get_ns();
 	if (options.frames)
 	{
-		frames_writer = std::make_unique<health::frame_writer>(log_dir, size_t(options.frames_max_mb) << 20, timestamp_for_filename);
+		frames_writer = std::make_unique<health::frame_writer>(log_dir, size_t(options.frames_max_mb) << 20, int(options.frames_keep), timestamp_for_filename);
 		frames_writer->on_line = [this](const std::string & line) {
 			if (on_line)
 				on_line(line);

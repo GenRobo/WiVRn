@@ -359,8 +359,8 @@ frame_events & events()
 
 // --- writer --------------------------------------------------------------------------------
 
-frame_writer::frame_writer(std::filesystem::path dir_, size_t max_bytes_, std::function<std::string()> stamp_) :
-        dir(std::move(dir_)), max_bytes(max_bytes_), stamp(std::move(stamp_))
+frame_writer::frame_writer(std::filesystem::path dir_, size_t max_bytes_, int keep_, std::function<std::string()> stamp_) :
+        dir(std::move(dir_)), max_bytes(max_bytes_), keep(keep_), stamp(std::move(stamp_))
 {
 }
 
@@ -376,7 +376,7 @@ void frame_writer::open()
 	out.close();
 	std::error_code ec;
 	std::filesystem::create_directories(dir, ec);
-	while (paths.size() >= size_t(keep))
+	while (keep > 0 and paths.size() >= size_t(keep))
 	{
 		std::filesystem::remove(paths.front(), ec);
 		paths.erase(paths.begin());

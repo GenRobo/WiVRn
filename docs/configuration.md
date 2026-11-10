@@ -156,7 +156,7 @@ Default value: all on, frame record off
 
 Stream health monitor: in-headset warnings, a per-second flight record and, on request, a
 per-frame record. See [health.md](health.md) for the keys (`warnings`, `log`, `app-data`,
-`frames`, `frames-max-mb`, `log-dir`, `thresholds`), the rules and the record formats.
+`frames`, `frames-max-mb`, `frames-keep`, `log-dir`, `thresholds`), the rules and the record formats.
 
 ### Example
 ```json

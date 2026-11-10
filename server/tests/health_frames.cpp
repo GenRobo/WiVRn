@@ -1,7 +1,7 @@
 // Unit tests for the per-frame record (GRID #3095 milestone 6a, docs/health.md "Frame record"):
 // ring to JSON line round trip including nulls, the header, rotation at the size limit with the
-// three-file cap, nothing written before the record is started, and the 2 s settle without
-// feedback. Usage: wivrn-health-frames-test
+// `frames-keep` file cap (0 keeps every file), nothing written before the record is started, and
+// the 2 s settle without feedback. Usage: wivrn-health-frames-test
 #include "driver/health_frames.h"
 
 #include <cstdlib>
@@ -193,9 +193,9 @@ void test_header_clock_event()
 	// The column is clock_offset::b (headset − server monotonic) in microseconds, the whole
 	// value: a headset that booted 824 s before the PC reads 824 394 750.743, and two clock lines
 	// a second apart differ by the estimate's drift only (32 µs/s on the 2026-11-10 laptop run).
-	int64_t b = 824'394'750'743;
-	auto c1 = nlohmann::json::parse(frame_clock_line(t0 + 44'000'000'000, t0, b, 33'000));
-	auto c2 = nlohmann::json::parse(frame_clock_line(t0 + 45'000'000'000, t0, b + 32'220, 33'000));
+	int64_t off_b = 824'394'750'743;
+	auto c1 = nlohmann::json::parse(frame_clock_line(t0 + 44'000'000'000, t0, off_b, 33'000));
+	auto c2 = nlohmann::json::parse(frame_clock_line(t0 + 45'000'000'000, t0, off_b + 32'220, 33'000));
 	CHECK(std::abs(c1["off_us"].get<double>() - 824394750.743) < 1e-6);
 	CHECK(std::abs(c2["off_us"].get<double>() - c1["off_us"].get<double>() - 32.22) < 1e-6);
 	CHECK(c2["t"].get<int64_t>() - c1["t"].get<int64_t>() == 1'000'000);
@@ -210,8 +210,8 @@ void test_header_clock_event()
 	CHECK(e["value"] == "FOCUSED");
 	auto n = nlohmann::json::parse(frame_event_line(t0 + 1'500'000, t0, "recenter", nullptr));
 	CHECK(n["value"].is_null());
-	auto b = nlohmann::json::parse(frame_event_line(t0, t0, "user_presence", true));
-	CHECK(b["value"] == true);
+	auto p = nlohmann::json::parse(frame_event_line(t0, t0, "user_presence", true));
+	CHECK(p["value"].is_boolean() and p["value"].get<bool>());
 }
 
 /// Drives frame n through every frame path, with feedback for stream 0 and 1.
@@ -304,7 +304,7 @@ void test_nothing_before_start()
 	temp_dir dir;
 	auto & ring = frames();
 	ring.reset();
-	frame_writer w(dir.path, 50 << 20, [] { return std::string("20261110-120000"); });
+	frame_writer w(dir.path, 50 << 20, 3, [] { return std::string("20261110-120000"); });
 	int lines = 0;
 	w.on_line = [&](const std::string &) { ++lines; };
 	produce(ring, 0, true, t0 + 100'000'000);
@@ -323,7 +323,7 @@ void test_settle_and_rows()
 	auto & ring = frames();
 	ring.reset();
 	int stamp = 0;
-	frame_writer w(dir.path, 50 << 20, [&] { return "stamp" + std::to_string(++stamp); });
+	frame_writer w(dir.path, 50 << 20, 3, [&] { return "stamp" + std::to_string(++stamp); });
 	std::vector<std::string> sent;
 	w.on_line = [&](const std::string & l) { sent.push_back(l); };
 
@@ -405,26 +405,50 @@ void test_settle_and_rows()
 	ring.reset();
 }
 
-void test_rotation()
+size_t frame_files_on_disk(const std::filesystem::path & dir)
+{
+	size_t on_disk = 0;
+	for (auto & entry: std::filesystem::directory_iterator(dir))
+		if (entry.path().filename().string().starts_with("wivrn-frames-"))
+			++on_disk;
+	return on_disk;
+}
+
+// Writes two frames (four rows of ~330 bytes plus a clock line) through `w`: with a 3000-byte
+// limit a call crosses it at most once, so `stamp` advances by one at a time.
+void write_rows(frame_writer & w, frame_ring & ring, uint64_t & n, int64_t base)
+{
+	uint64_t first = n;
+	for (; n < first + 2; ++n)
+		produce(ring, n, true, base);
+	w.tick(ring, base + int64_t(n) * period + frame_writer::settle_ns, 0, 0);
+}
+
+void test_rotation_keep_3()
 {
 	temp_dir dir;
 	auto & ring = frames();
 	ring.reset();
 	int stamp = 0;
-	// Each frame line is ~330 bytes; a 3000-byte limit rotates every few rows.
-	frame_writer w(dir.path, 3000, [&] { return "r" + std::to_string(++stamp); });
+	frame_writer w(dir.path, 3000, 3, [&] { return "r" + std::to_string(++stamp); });
 	int64_t base = t0 + 100'000'000;
 	w.start(ring, header());
-	for (uint64_t n = 0; n < 60; ++n)
-		produce(ring, n, true, base);
-	w.tick(ring, base + 60 * period + frame_writer::settle_ns, 0, 0);
-	CHECK(stamp > 3);
-	CHECK(w.files().size() == frame_writer::keep);
-	size_t on_disk = 0;
-	for (auto & entry: std::filesystem::directory_iterator(dir.path))
-		if (entry.path().filename().string().starts_with("wivrn-frames-"))
-			++on_disk;
-	CHECK(on_disk == frame_writer::keep);
+	CHECK(stamp == 1);
+	uint64_t n = 0;
+	// Fill until the third file exists: nothing deleted yet.
+	while (stamp < 3)
+		write_rows(w, ring, n, base);
+	CHECK(w.files().size() == 3);
+	CHECK(frame_files_on_disk(dir.path) == 3);
+	CHECK(std::filesystem::exists(dir.path / "wivrn-frames-r1.jsonl"));
+	// The fourth file deletes the oldest.
+	while (stamp < 4)
+		write_rows(w, ring, n, base);
+	CHECK(stamp == 4);
+	CHECK(w.files().size() == 3);
+	CHECK(frame_files_on_disk(dir.path) == 3);
+	CHECK(not std::filesystem::exists(dir.path / "wivrn-frames-r1.jsonl"));
+	CHECK(std::filesystem::exists(dir.path / "wivrn-frames-r2.jsonl"));
 	for (auto & path: w.files())
 	{
 		CHECK(std::filesystem::exists(path));
@@ -432,8 +456,35 @@ void test_rotation()
 		auto lines = read_lines(path);
 		CHECK(not lines.empty() and lines.front()["type"] == "header");
 	}
-	CHECK(not std::filesystem::exists(dir.path / "wivrn-frames-r1.jsonl"));
 	CHECK(w.current().filename().string() == "wivrn-frames-r" + std::to_string(stamp) + ".jsonl");
+	ring.reset();
+}
+
+void test_rotation_keep_0()
+{
+	temp_dir dir;
+	auto & ring = frames();
+	ring.reset();
+	int stamp = 0;
+	frame_writer w(dir.path, 3000, 0, [&] { return "k" + std::to_string(++stamp); });
+	int64_t base = t0 + 100'000'000;
+	w.start(ring, header());
+	uint64_t n = 0;
+	// Five rotations after the first file: six files, none deleted.
+	while (stamp < 6)
+		write_rows(w, ring, n, base);
+	CHECK(stamp == 6);
+	CHECK(w.files().size() == 6);
+	CHECK(frame_files_on_disk(dir.path) == 6);
+	for (int i = 1; i <= 6; ++i)
+		CHECK(std::filesystem::exists(dir.path / ("wivrn-frames-k" + std::to_string(i) + ".jsonl")));
+	for (auto & path: w.files())
+	{
+		CHECK(std::filesystem::file_size(path) <= 3000);
+		auto lines = read_lines(path);
+		CHECK(not lines.empty() and lines.front()["type"] == "header");
+	}
+	CHECK(w.current().filename().string() == "wivrn-frames-k6.jsonl");
 	ring.reset();
 }
 
@@ -446,7 +497,8 @@ int main()
 	test_ring();
 	test_nothing_before_start();
 	test_settle_and_rows();
-	test_rotation();
+	test_rotation_keep_3();
+	test_rotation_keep_0();
 	if (failures)
 	{
 		std::cerr << failures << " failure(s)" << std::endl;

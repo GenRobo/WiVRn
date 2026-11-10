@@ -35,6 +35,7 @@ still shows those as before.
 		"app-data": true,
 		"frames": false,
 		"frames-max-mb": 50,
+		"frames-keep": 3,
 		"log-dir": "/var/tmp/wivrn",
 		"thresholds": { "link_loss.frames_per_s": 5, "app_slow.ratio": 0.9 }
 	}
@@ -47,7 +48,8 @@ still shows those as before.
 | `log` | `true` | Write the flight record (below) |
 | `app-data` | `true` | Speak the [connector](#connector) protocol on the `wivrn-health` app-data channel, when one is configured |
 | `frames` | `false` | Write the [frame record](#frame-record): one line per application frame per stream (`vivarium-teleop xr up --trace-light`, GRID#3095) |
-| `frames-max-mb` | `50` | Rotate the frame record at this size; at most 3 files are kept per server run |
+| `frames-max-mb` | `50` | Rotate the frame record at this size |
+| `frames-keep` | `3` | Frame record files kept per server run, the oldest deleted first; `0` keeps every file (`vivarium-teleop xr up --trace` sets this, so the file it names outlives a long session) |
 | `log-dir` | `%LOCALAPPDATA%\wivrn\logs` on Windows, `$XDG_STATE_HOME/wivrn` or `~/.local/state/wivrn` elsewhere | Where the records go |
 | `thresholds` | see below | `"<rule>.<param>": number` overrides; unknown keys are ignored |
 
@@ -124,7 +126,8 @@ With `health.frames` on, every application frame leaves one line per video strea
 `wivrn-frames-<time>.jsonl` (same directory as the flight record), the input of
 `vivarium-teleop xr trace` (GRID#3095). The file opens when a headset session starts and
 closes when it ends; it rotates at `frames-max-mb` (a new `wivrn-frames-<time>.jsonl`, the
-oldest of more than three deleted). UTF-8, one JSON object per line, LF.
+oldest beyond `frames-keep` deleted; `frames-keep: 0` deletes nothing). At 72 Hz with two
+streams 50 MB is about nine minutes. UTF-8, one JSON object per line, LF.
 
 The first line is the header:
 
