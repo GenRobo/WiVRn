@@ -53,38 +53,12 @@ namespace wivrn
 
 namespace
 {
-// Per-stream pipeline counters, logged every 5 s.
-struct stream_stats
-{
-	std::atomic<uint64_t> presented, skipped, encode_calls, encoded, empty, bytes, shards;
-};
-stream_stats stats[3];
-std::atomic<int64_t> next_stats_log_ns = 0;
-// Health monitor view of the same counters; separate so the five-second log keeps its own windows.
+// Per-process encoder counters the health monitor drains once per second (health_monitor.cpp);
+// the encoders' own five-second log summary went with GRID #2834 M5.
 struct health_stats
 {
 	std::atomic<uint64_t> presented, skipped, bytes, shards;
 } health_totals;
-
-void maybe_log_stats()
-{
-	int64_t now = os_monotonic_get_ns();
-	int64_t next = next_stats_log_ns.load();
-	if (now < next or not next_stats_log_ns.compare_exchange_strong(next, now + 5'000'000'000))
-		return;
-	if (next == 0)
-		return; // first call only arms the timer
-	for (int i = 0; i < 3; ++i)
-	{
-		auto & s = stats[i];
-		uint64_t presented = s.presented.exchange(0), skipped = s.skipped.exchange(0), calls = s.encode_calls.exchange(0),
-		         encoded = s.encoded.exchange(0), empty = s.empty.exchange(0), bytes = s.bytes.exchange(0), shards = s.shards.exchange(0);
-		if (presented or calls or bytes)
-			U_LOG_I("encoder stream %d (5 s): presented %" PRIu64 ", skipped (waiting for headset ack) %" PRIu64 ", encode calls %" PRIu64
-			        ", frames produced %" PRIu64 ", empty %" PRIu64 ", sent %" PRIu64 " shards / %.2f Mbit/s",
-			        i, presented, skipped, calls, encoded, empty, shards, bytes * 8 / 5e6);
-	}
-}
 } // namespace
 
 video_encoder::health_counters video_encoder::take_health_counters()
@@ -291,11 +265,9 @@ void video_encoder::present_image(vk::Image y_cbcr, vk::SemaphoreSubmitInfo info
 	// Wait for encoder to be done
 	present_slot = (present_slot + 1) % num_slots;
 	state[present_slot].wait(busy);
-	stats[stream_idx % 3].presented++;
 	health_totals.presented.fetch_add(1, std::memory_order_relaxed);
 	if (idr->should_skip(frame_index))
 	{
-		stats[stream_idx % 3].skipped++;
 		health_totals.skipped.fetch_add(1, std::memory_order_relaxed);
 		// The reference-tracking encoders (Vulkan Video) stop encoding until the headset acknowledges a
 		// frame (feedback.sent_to_decoder); make a stall visible instead of silent.
@@ -362,18 +334,13 @@ void video_encoder::encode(wivrn_session & cnx,
 		};
 	}
 
-	stats[stream_idx % 3].encode_calls++;
 	auto data = encode(encode_slot, frame_index);
 	if (data)
 	{
-		stats[stream_idx % 3].encoded++;
 		timing_info.encode_end = clock.to_headset(os_monotonic_get_ns());
 		assert(shared_sender);
 		shared_sender->push(std::move(*data));
 	}
-	else
-		stats[stream_idx % 3].empty++;
-	maybe_log_stats();
 }
 
 void video_encoder::SendData(std::span<uint8_t> data, bool end_of_frame, bool control)
@@ -404,7 +371,6 @@ void video_encoder::SendData(std::span<uint8_t> data, bool end_of_frame, bool co
 			capture_log.write(capture_frame, clock);
 		}
 	}
-	stats[stream_idx % 3].bytes += data.size();
 	health_totals.bytes.fetch_add(data.size(), std::memory_order_relaxed);
 
 	ssize_t max_payload_size = (cnx->has_stream() and not control) ? to_headset::video_stream_data_shard::max_payload_size : std::numeric_limits<uint32_t>::max();
@@ -433,7 +399,6 @@ void video_encoder::SendData(std::span<uint8_t> data, bool end_of_frame, bool co
 			// Ignore network errors
 		}
 		++shard.shard_idx;
-		stats[stream_idx % 3].shards++;
 		health_totals.shards.fetch_add(1, std::memory_order_relaxed);
 		shard.view_info.reset();
 		begin = next;
