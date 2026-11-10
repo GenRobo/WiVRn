@@ -81,6 +81,8 @@ struct sample
 		float cpu_ms = -1;
 		float gpu_ms = -1;
 		float late_pct = -1;
+		uint32_t half_rate_probes = 0;     // one-period probes the app pacer issued (GRID #2834 lock-in)
+		uint32_t half_rate_recoveries = 0; // probes the application answered in time
 	} app;
 
 	float motion_to_photon_ms_p95 = -1;

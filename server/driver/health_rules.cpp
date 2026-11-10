@@ -339,6 +339,8 @@ std::string to_json_line(const sample & s, std::span<const rule_id> active)
 	        {"cpu_ms", s.app.cpu_ms},
 	        {"gpu_ms", s.app.gpu_ms},
 	        {"late_pct", s.app.late_pct},
+	        {"half_rate_probes", s.app.half_rate_probes},
+	        {"half_rate_recoveries", s.app.half_rate_recoveries},
 	};
 	j["motion_to_photon_ms_p95"] = s.motion_to_photon_ms_p95;
 	auto names = nlohmann::json::array();
@@ -401,6 +403,8 @@ std::optional<sample> from_json_line(std::string_view line)
 		get(*it, "cpu_ms", s.app.cpu_ms);
 		get(*it, "gpu_ms", s.app.gpu_ms);
 		get(*it, "late_pct", s.app.late_pct);
+		get(*it, "half_rate_probes", s.app.half_rate_probes);
+		get(*it, "half_rate_recoveries", s.app.half_rate_recoveries);
 	}
 	get(j, "motion_to_photon_ms_p95", s.motion_to_photon_ms_p95);
 	if (auto it = j.find("app_metrics"); it != j.end() and it->is_object())

@@ -322,6 +322,17 @@ if (WIVRN_BUILD_SERVER)
 		target_include_directories(wivrn-health-test PRIVATE .)
 		target_link_libraries(wivrn-health-test PRIVATE nlohmann_json::nlohmann_json)
 		add_test(NAME health_rules COMMAND wivrn-health-test ${CMAKE_CURRENT_SOURCE_DIR}/tests/health_fixtures)
+		# Application pacer (GRID #2834): the half-rate lock-in and its probe, over a fake clock.
+		add_executable(wivrn-app-pacer-test
+			tests/app_pacer.cpp
+			driver/app_pacer.cpp
+			driver/configuration.cpp
+			hostname.cpp
+		)
+		target_compile_features(wivrn-app-pacer-test PRIVATE cxx_std_20)
+		target_include_directories(wivrn-app-pacer-test PRIVATE .)
+		target_link_libraries(wivrn-app-pacer-test PRIVATE nlohmann_json::nlohmann_json aux_os aux_util wivrn-common xrt-external-openxr)
+		add_test(NAME app_pacer COMMAND wivrn-app-pacer-test)
 		# Mixed-reality capture (GRID #2837): the manifest and frame sidecar the offline compositor reads.
 		add_executable(wivrn-capture-test
 			tests/capture_log.cpp

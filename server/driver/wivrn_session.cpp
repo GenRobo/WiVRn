@@ -171,6 +171,8 @@ wivrn::wivrn_session::wivrn_session(std::unique_ptr<wivrn_connection> connection
 		        s.app.late_pct = app.delivered ? 100.f * float(app.late) / float(app.delivered) : (app.apps ? 0.f : -1.f);
 		        s.app.cpu_ms = app.cpu_ns > 0 ? float(app.cpu_ns) * 1e-6f : -1;
 		        s.app.gpu_ms = app.gpu_ns > 0 ? float(app.gpu_ns) * 1e-6f : -1;
+		        s.app.half_rate_probes = app.half_rate_probes;
+		        s.app.half_rate_recoveries = app.half_rate_recoveries;
 	        });
 	health->send_health = [this](const to_headset::health & h) { send_control(to_headset::health{h}); };
 

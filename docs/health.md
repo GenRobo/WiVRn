@@ -81,7 +81,7 @@ a competing browser dropped the application from 120 Hz to 66–82 Hz.
  "headset":{"decode_ms_p95":4.4,"display_jitter_ms_p95":0.1,"frames_repeated":0,"display_hz":120,
             "requested_hz":120,"thermal_status":-1,"battery_pct":62,"charging":true,"gpu_ms":-1,"cpu_ms":-1},
  "encoder":{"presented":360,"skipped":0,"encode_ms_p95":2.8,"util_pct":29},
- "app":{"hz":120,"cpu_ms":3.3,"gpu_ms":0.15,"late_pct":0.0},
+ "app":{"hz":120,"cpu_ms":3.3,"gpu_ms":0.15,"late_pct":0.0,"half_rate_probes":0,"half_rate_recoveries":0},
  "motion_to_photon_ms_p95":26.5,
  "warnings":[]}
 ```
@@ -90,6 +90,11 @@ a competing browser dropped the application from 120 Hz to 66–82 Hz.
   width 25 %), reset every second. `-1` means unknown.
 - `encoder.presented` counts all three streams (two eyes and the alpha stream).
 - `link.idr_unsent_gap` is reserved: it needs encoder frame-id tracking and is 0 for now.
+- `app.half_rate_probes` counts the frames the application pacer predicted one period out to
+  test a half-rate lock-in (an application delivering at a steady 2x or 3x the display period,
+  see [app-margin-ms](configuration.md#app-margin-ms)), `app.half_rate_recoveries` the ones the
+  application answered in time, after which it is paced at one period again. A probe per second
+  with no recovery is an application that really needs two periods.
 - `app_metrics` appears when an application posted metrics on the [connector](#connector)
   during that second, `app_metrics_dropped` when it posted lines the server rejected, and
   `app_warnings` lists the application warnings still within their ttl.

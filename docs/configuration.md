@@ -132,6 +132,18 @@ the compositor deadline. Range 0.5 to 5. A larger margin wakes the application e
 trading a little latency for fewer late frames. Applications with variable frame times,
 such as WebXR in a browser, may need 3 to pace smoothly at 120 Hz.
 
+A pipelined application such as a browser can lock into half rate after a hiccup: handed display
+times two periods out it delivers two periods after its wake-up, which the pacer measures as two
+periods of CPU time and answers with two-period display times again, although each frame costs it
+a fraction of a period (GRID #2834, 66 Hz at a 120 Hz display with 15 ms measured against 1.5 ms
+of work). The margin makes this rarer, not impossible. Once an application has delivered at a
+steady 2x or 3x the display period (within 5 %) for a second while its measured GPU time fits in
+one period with the margin, the pacer predicts one frame per second one period out regardless of
+the CPU estimate. If that frame arrives in time the estimate is reset to what it measured and
+pacing continues at one period; if it misses, it is shown where the slower cadence would have
+shown it anyway and the next probe waits another second. The [health record](health.md) counts
+the probes and the recoveries under `app`.
+
 ### Example
 ```json
 {
