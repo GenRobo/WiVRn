@@ -245,4 +245,37 @@ private:
 	std::array<int64_t, frame_ring::streams> next_n{};
 };
 
+/// Visits, in frame order per stream, every row from `next_n[s]` that has settled by `now_ns`:
+/// the headset displayed a frame three beyond it on that stream (its three-deep buffer released
+/// it, so `shown` is final) or `frame_writer::settle_ns` passed since its predicted display time.
+/// Advances `next_n`; a slot taken over by a later frame is skipped. The writer and the judder
+/// rule (health_rules.h) share this rule so both see the same rows.
+template <typename F>
+void settled_rows(const frame_ring & ring, std::array<int64_t, frame_ring::streams> & next_n, uint8_t stream_count, int64_t now_ns, F && visit)
+{
+	int64_t latest = ring.latest();
+	for (uint8_t s = 0; s < stream_count and s < frame_ring::streams; ++s)
+	{
+		int64_t & n = next_n[s];
+		int64_t displayed = ring.latest_displayed(s);
+		while (n <= latest)
+		{
+			auto row = ring.read(uint64_t(n), s);
+			if (not row)
+			{
+				if (latest - n >= int64_t(frame_ring::size))
+				{
+					++n;
+					continue;
+				}
+				break;
+			}
+			if (displayed < n + 3 and now_ns - row->pd < frame_writer::settle_ns)
+				break;
+			visit(*row);
+			++n;
+		}
+	}
+}
+
 } // namespace wivrn::health

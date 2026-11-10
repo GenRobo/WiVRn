@@ -70,6 +70,13 @@ int main()
 	        .network_kind = 3,
 	        .rssi_dbm = -61,
 	        .link_mbps = 1000,
+	        .compositor_dropped = 2,
+	        .compositor_stale = 0xFFFF,
+	        .compositor_gpu_ms_x10 = 31,
+	        .app_gpu_ms_x10 = 47,
+	        .runtime_m2p_ms_x10 = 412,
+	        .cpu_util_pct = 63,
+	        .gpu_util_pct = 255,
 	};
 	auto t2 = round_trip<from_headset::packets>(t);
 	CHECK(t2.frames_received == 600 and t2.frames_incomplete == 7 and t2.frames_decoded == 593);
@@ -77,6 +84,9 @@ int main()
 	CHECK(t2.decode_ms_p95_x10 == 41 and t2.gpu_ms_x10 == 23 and t2.cpu_ms_x10 == 12 and t2.display_hz_active_x10 == 1200);
 	CHECK(t2.thermal_status == 2 and t2.cpu_level == 3 and t2.gpu_level == 4 and t2.network_kind == 3);
 	CHECK(t2.rssi_dbm == -61 and t2.link_mbps == 1000);
+	// Headset runtime counters (GRID #3095 M6c): values and the unknown sentinels survive the trip.
+	CHECK(t2.compositor_dropped == 2 and t2.compositor_stale == 0xFFFF and t2.compositor_gpu_ms_x10 == 31);
+	CHECK(t2.app_gpu_ms_x10 == 47 and t2.runtime_m2p_ms_x10 == 412 and t2.cpu_util_pct == 63 and t2.gpu_util_pct == 255);
 
 	to_headset::health h{};
 	h.link.idr_lost_ref = 8;
@@ -87,8 +97,11 @@ int main()
 	CHECK(h2.app.hz == h.app.hz);
 	CHECK(h2.headset.thermal_status == 2);
 
-	// The protocol version of a build with the packets differs from the last release without them.
+	// The protocol version of a build with the packets differs from the last release without them,
+	// and the counters appended in M6c changed it once more (one APK carries everything).
 	CHECK(protocol_version != WIVRN_PROTOCOL_VERSION_BEFORE_HEALTH);
+	CHECK(protocol_version != WIVRN_PROTOCOL_VERSION_BEFORE_COUNTERS);
+	std::cout << "protocol version " << std::hex << protocol_version << std::dec << std::endl;
 
 	if (failures)
 		return 1;

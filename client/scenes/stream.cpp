@@ -592,6 +592,7 @@ void scenes::stream::on_focused()
 		session.set_performance_level(XR_PERF_SETTINGS_DOMAIN_GPU_EXT, XR_PERF_SETTINGS_LEVEL_SUSTAINED_LOW_EXT);
 		perf_level_cpu = perf_level_gpu = uint8_t(XR_PERF_SETTINGS_LEVEL_SUSTAINED_LOW_EXT);
 	}
+	setup_runtime_counters();
 }
 
 void scenes::stream::on_unfocused()

@@ -135,6 +135,8 @@ private:
 	int64_t frames_t0_ns = 0;
 	uint8_t video_streams;
 	void frames_tick(const health::sample &);
+	// Judder rule (GRID #3095 M6c): the next ring row to classify per stream, monitor thread only.
+	std::array<int64_t, health::frame_ring::streams> judder_next_n{};
 
 	std::jthread thread;
 };

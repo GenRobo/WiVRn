@@ -422,31 +422,7 @@ void frame_writer::tick(const frame_ring & ring, int64_t now_ns, int64_t off_ns,
 {
 	if (not started())
 		return;
-	int64_t latest = ring.latest();
-	for (uint8_t s = 0; s < stream_count; ++s)
-	{
-		int64_t & n = next_n[s];
-		int64_t displayed = ring.latest_displayed(s);
-		while (n <= latest)
-		{
-			auto row = ring.read(uint64_t(n), s);
-			if (not row)
-			{
-				// Taken over by a frame `size` later: the writer fell behind, skip the gap.
-				if (latest - n >= int64_t(frame_ring::size))
-				{
-					++n;
-					continue;
-				}
-				break;
-			}
-			bool final = displayed >= n + 3 or now_ns - row->pd >= settle_ns;
-			if (not final)
-				break;
-			write(frame_line(*row, t0));
-			++n;
-		}
-	}
+	settled_rows(ring, next_n, stream_count, now_ns, [this](const frame_row & row) { write(frame_line(row, t0)); });
 	write(frame_clock_line(now_ns, t0, off_ns, jitter_ns));
 	out.flush();
 }

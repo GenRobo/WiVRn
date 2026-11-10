@@ -171,6 +171,38 @@ void scenes::stream::observe_decode_ms(float ms)
 	health_counters.decode_hist[bucket].fetch_add(1, std::memory_order_relaxed);
 }
 
+void scenes::stream::setup_runtime_counters()
+{
+	runtime_counters = {};
+	if (not instance.has_extension(XR_META_PERFORMANCE_METRICS_EXTENSION_NAME))
+		return;
+	// The runtime's own list decides what is read: a path it does not list makes
+	// xrQueryPerformanceMetricsCounterMETA fail, so the field stays unknown instead. The list is
+	// logged once (greppable) because the extension's specification only says which paths "may"
+	// exist on Meta devices.
+	auto available = session.performance_metrics_counters();
+	std::string names;
+	for (const auto & p: available)
+		names += (names.empty() ? "" : " ") + p;
+	spdlog::info("XR_META_performance_metrics counters ({}): {}", available.size(), names);
+	auto resolve = [&](const char * path) {
+		return std::ranges::find(available, path) != available.end() ? instance.string_to_path(path) : XR_NULL_PATH;
+	};
+	runtime_counters.compositor_dropped = resolve("/perfmetrics_meta/compositor/dropped_frame_count");
+	// No stale-frame counter is in the specification's list (revision 2): the first name is a
+	// guess checked against the runtime's list; without it the frames-per-second counter, also
+	// unlisted, gives stale = refresh rate - compositor rate; without either the field is unknown.
+	runtime_counters.compositor_stale = resolve("/perfmetrics_meta/compositor/stale_frame_count");
+	runtime_counters.compositor_fps = resolve("/perfmetrics_meta/compositor/frames_per_second");
+	runtime_counters.compositor_gpu = resolve("/perfmetrics_meta/compositor/gpu_frametime");
+	runtime_counters.app_gpu = resolve("/perfmetrics_meta/app/gpu_frametime");
+	runtime_counters.app_m2p = resolve("/perfmetrics_meta/app/motion_to_photon_latency");
+	runtime_counters.cpu_util = resolve("/perfmetrics_meta/device/cpu_utilization_average");
+	runtime_counters.gpu_util = resolve("/perfmetrics_meta/device/gpu_utilization");
+	runtime_counters.enabled = session.enable_performance_metrics();
+	spdlog::info("XR_META_performance_metrics: {}", runtime_counters.enabled ? "enabled" : "not enabled");
+}
+
 void scenes::stream::send_telemetry(XrTime now)
 {
 	uint32_t total = 0;
@@ -210,6 +242,13 @@ void scenes::stream::send_telemetry(XrTime now)
 	        .network_kind = 0,
 	        .rssi_dbm = INT16_MIN,
 	        .link_mbps = 0,
+	        .compositor_dropped = 0xFFFF,
+	        .compositor_stale = 0xFFFF,
+	        .compositor_gpu_ms_x10 = 0xFFFF,
+	        .app_gpu_ms_x10 = 0xFFFF,
+	        .runtime_m2p_ms_x10 = 0xFFFF,
+	        .cpu_util_pct = 255,
+	        .gpu_util_pct = 255,
 	};
 	t.frames_received = t.frames_incomplete + t.frames_decoded;
 	if (instance.has_extension(XR_FB_DISPLAY_REFRESH_RATE_EXTENSION_NAME))
@@ -218,6 +257,34 @@ void scenes::stream::send_telemetry(XrTime now)
 	t.network_kind = device_network_kind.load();
 	t.rssi_dbm = device_rssi_dbm.load();
 	t.link_mbps = device_link_mbps.load();
+	if (runtime_counters.enabled)
+	{
+		// A counter is a float or an integer at the runtime's choice; 0xFFFF / 255 stay reserved.
+		auto value = [&](XrPath p) -> std::optional<float> {
+			auto c = session.query_performance_metrics(p);
+			if (not c)
+				return std::nullopt;
+			return (c->counterFlags & XR_PERFORMANCE_METRICS_COUNTER_FLOAT_VALUE_VALID_BIT_META) ? c->floatValue : float(c->uintValue);
+		};
+		auto u16 = [&](XrPath p, float scale) -> uint16_t {
+			auto v = value(p);
+			return v ? uint16_t(std::clamp(std::round(*v * scale), 0.f, 65534.f)) : 0xFFFF;
+		};
+		auto pct = [&](XrPath p) -> uint8_t {
+			auto v = value(p);
+			return v ? uint8_t(std::clamp(std::round(*v), 0.f, 254.f)) : 255;
+		};
+		t.compositor_dropped = u16(runtime_counters.compositor_dropped, 1);
+		t.compositor_gpu_ms_x10 = u16(runtime_counters.compositor_gpu, 10);
+		t.app_gpu_ms_x10 = u16(runtime_counters.app_gpu, 10);
+		t.runtime_m2p_ms_x10 = u16(runtime_counters.app_m2p, 10);
+		t.cpu_util_pct = pct(runtime_counters.cpu_util);
+		t.gpu_util_pct = pct(runtime_counters.gpu_util);
+		if (runtime_counters.compositor_stale != XR_NULL_PATH)
+			t.compositor_stale = u16(runtime_counters.compositor_stale, 1);
+		else if (auto fps = value(runtime_counters.compositor_fps); fps and t.display_hz_active_x10)
+			t.compositor_stale = uint16_t(std::clamp(std::round(float(t.display_hz_active_x10) / 10.f - *fps), 0.f, 65534.f));
+	}
 	try
 	{
 		network_session->send_control(std::move(t));

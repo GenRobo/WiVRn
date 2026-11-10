@@ -21,6 +21,7 @@
 
 #include "utils/handle.h"
 #include "utils/thread_safe.h"
+#include <optional>
 #include <span>
 #include <string>
 #include <vector>
@@ -47,6 +48,10 @@ class session : public utils::handle<XrSession, xrDestroySession>
 	PFN_xrRequestDisplayRefreshRateFB xrRequestDisplayRefreshRateFB = nullptr;
 
 	PFN_xrPerfSettingsSetPerformanceLevelEXT xrPerfSettingsSetPerformanceLevelEXT = nullptr;
+
+	PFN_xrEnumeratePerformanceMetricsCounterPathsMETA xrEnumeratePerformanceMetricsCounterPathsMETA = nullptr;
+	PFN_xrSetPerformanceMetricsStateMETA xrSetPerformanceMetricsStateMETA = nullptr;
+	PFN_xrQueryPerformanceMetricsCounterMETA xrQueryPerformanceMetricsCounterMETA = nullptr;
 
 public:
 	session() = default;
@@ -99,5 +104,14 @@ public:
 	}
 
 	void set_performance_level(XrPerfSettingsDomainEXT, XrPerfSettingsLevelEXT);
+
+	// XR_META_performance_metrics (GRID #3095 M6c). All three are no-ops without the extension.
+	/// The counter paths the runtime offers, as strings (`/perfmetrics_meta/...`).
+	std::vector<std::string> performance_metrics_counters();
+	/// Turns the runtime's performance metrics system on; false when it refused or is absent.
+	bool enable_performance_metrics();
+	/// The counter's value, or nullopt when the path is XR_NULL_PATH, the query fails or the
+	/// runtime marks neither value valid. The unit is whatever the runtime reports.
+	std::optional<XrPerformanceMetricsCounterMETA> query_performance_metrics(XrPath counter);
 };
 } // namespace xr

@@ -60,6 +60,13 @@ xr::session::session(xr::instance & inst, xr::system & sys, vk::raii::Instance &
 
 	if (inst.has_extension(XR_EXT_PERFORMANCE_SETTINGS_EXTENSION_NAME))
 		xrPerfSettingsSetPerformanceLevelEXT = inst.get_proc<PFN_xrPerfSettingsSetPerformanceLevelEXT>("xrPerfSettingsSetPerformanceLevelEXT");
+
+	if (inst.has_extension(XR_META_PERFORMANCE_METRICS_EXTENSION_NAME))
+	{
+		xrEnumeratePerformanceMetricsCounterPathsMETA = inst.get_proc<PFN_xrEnumeratePerformanceMetricsCounterPathsMETA>("xrEnumeratePerformanceMetricsCounterPathsMETA");
+		xrSetPerformanceMetricsStateMETA = inst.get_proc<PFN_xrSetPerformanceMetricsStateMETA>("xrSetPerformanceMetricsStateMETA");
+		xrQueryPerformanceMetricsCounterMETA = inst.get_proc<PFN_xrQueryPerformanceMetricsCounterMETA>("xrQueryPerformanceMetricsCounterMETA");
+	}
 }
 
 std::vector<XrReferenceSpaceType> xr::session::get_reference_spaces() const
@@ -382,4 +389,47 @@ void xr::session::set_performance_level(XrPerfSettingsDomainEXT domain, XrPerfSe
 {
 	if (xrPerfSettingsSetPerformanceLevelEXT)
 		xrPerfSettingsSetPerformanceLevelEXT(*this, domain, level);
+}
+
+std::vector<std::string> xr::session::performance_metrics_counters()
+{
+	std::vector<std::string> names;
+	if (not xrEnumeratePerformanceMetricsCounterPathsMETA)
+		return names;
+	try
+	{
+		for (XrPath p: xr::details::enumerate<XrPath>(xrEnumeratePerformanceMetricsCounterPathsMETA, *inst))
+			names.push_back(inst->path_to_string(p));
+	}
+	catch (std::exception & e)
+	{
+		spdlog::warn("xrEnumeratePerformanceMetricsCounterPathsMETA: {}", e.what());
+	}
+	return names;
+}
+
+bool xr::session::enable_performance_metrics()
+{
+	if (not xrSetPerformanceMetricsStateMETA)
+		return false;
+	XrPerformanceMetricsStateMETA state{
+	        .type = XR_TYPE_PERFORMANCE_METRICS_STATE_META,
+	        .enabled = XR_TRUE,
+	};
+	if (auto res = xrSetPerformanceMetricsStateMETA(id, &state); res != XR_SUCCESS)
+	{
+		spdlog::warn("xrSetPerformanceMetricsStateMETA: {}", xr::to_string(res));
+		return false;
+	}
+	return true;
+}
+
+std::optional<XrPerformanceMetricsCounterMETA> xr::session::query_performance_metrics(XrPath counter)
+{
+	if (not xrQueryPerformanceMetricsCounterMETA or counter == XR_NULL_PATH)
+		return std::nullopt;
+	XrPerformanceMetricsCounterMETA value{.type = XR_TYPE_PERFORMANCE_METRICS_COUNTER_META};
+	if (xrQueryPerformanceMetricsCounterMETA(id, counter, &value) != XR_SUCCESS or not(value.counterFlags & XR_PERFORMANCE_METRICS_COUNTER_ANY_VALUE_VALID_BIT_META))
+		return std::nullopt;
+	return value;
 }

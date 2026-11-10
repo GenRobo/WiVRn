@@ -68,7 +68,7 @@ void log_histogram::clear()
 
 namespace
 {
-constexpr std::array<std::string_view, 9> rule_names{
+constexpr std::array<std::string_view, 10> rule_names{
         "link_loss",
         "link_slow",
         "encoder_busy",
@@ -78,6 +78,7 @@ constexpr std::array<std::string_view, 9> rule_names{
         "headset_thermal",
         "headset_battery",
         "refresh_mismatch",
+        "judder",
 };
 
 // Defaults from the 2026-10-29/30 measurements (design §4).
@@ -93,6 +94,7 @@ const std::map<std::string, float> default_thresholds{
         {"headset_thermal.status", 3}, // Android PowerManager: 3 = severe
         {"headset_battery.pct", 15},
         {"refresh_mismatch.hz", 1},
+        {"judder.pct", 2}, // GRID #3095 design 6.7
 };
 } // namespace
 
@@ -236,7 +238,30 @@ std::optional<warning> refresh_mismatch(std::span<const sample> recent, const th
 	               std::format("Headset running at {:.0f} Hz, not the requested {:.0f} Hz.", s.headset.display_hz, s.headset.requested_hz)};
 }
 
-constexpr std::array<rule, 9> all_rules{
+std::optional<warning> judder(std::span<const sample> recent, const thresholds & th)
+{
+	const sample & s = recent.back();
+	if (s.frames.display <= 0)
+		return std::nullopt;
+	float pct = 100.f * float(s.frames.repeated + s.frames.skipped) / float(s.frames.display);
+	if (pct <= th.get("judder.pct"))
+		return std::nullopt;
+	// The class is read over the seconds the rule needs to fire, so one bad second does not name it.
+	sample::frame_stats sum;
+	for (size_t i = recent.size() - std::min<size_t>(recent.size(), 3); i < recent.size(); ++i)
+	{
+		const auto & f = recent[i].frames;
+		sum.link += f.link;
+		sum.app += f.app;
+		sum.encode += f.encode;
+		sum.decode += f.decode;
+		sum.compositor += f.compositor;
+		sum.tracking += f.tracking;
+	}
+	return warning{rule_id::judder, std::format("Judder: {:.1f} % of frames repeated or skipped, mostly {}", pct, dominant_class(sum))};
+}
+
+constexpr std::array<rule, 10> all_rules{
         link_loss,
         link_slow,
         encoder_busy,
@@ -246,6 +271,7 @@ constexpr std::array<rule, 9> all_rules{
         headset_thermal,
         headset_battery,
         refresh_mismatch,
+        judder,
 };
 } // namespace
 
@@ -327,6 +353,13 @@ std::string to_json_line(const sample & s, std::span<const rule_id> active)
 	        {"charging", s.headset.charging},
 	        {"gpu_ms", s.headset.gpu_ms},
 	        {"cpu_ms", s.headset.cpu_ms},
+	        {"compositor_dropped", s.headset.compositor_dropped},
+	        {"compositor_stale", s.headset.compositor_stale},
+	        {"compositor_gpu_ms", s.headset.compositor_gpu_ms},
+	        {"app_gpu_ms", s.headset.app_gpu_ms},
+	        {"runtime_m2p_ms", s.headset.runtime_m2p_ms},
+	        {"cpu_util_pct", s.headset.cpu_util_pct},
+	        {"gpu_util_pct", s.headset.gpu_util_pct},
 	};
 	j["encoder"] = {
 	        {"presented", s.encoder.presented},
@@ -343,6 +376,18 @@ std::string to_json_line(const sample & s, std::span<const rule_id> active)
 	        {"half_rate_recoveries", s.app.half_rate_recoveries},
 	};
 	j["motion_to_photon_ms_p95"] = s.motion_to_photon_ms_p95;
+	j["frames"] = {
+	        {"display", s.frames.display},
+	        {"repeated", s.frames.repeated},
+	        {"skipped", s.frames.skipped},
+	        {"link", s.frames.link},
+	        {"app", s.frames.app},
+	        {"encode", s.frames.encode},
+	        {"decode", s.frames.decode},
+	        {"compositor", s.frames.compositor},
+	        {"tracking", s.frames.tracking},
+	        {"unattributed", s.frames.unattributed},
+	};
 	auto names = nlohmann::json::array();
 	for (auto id: active)
 		names.push_back(name(id));
@@ -389,6 +434,13 @@ std::optional<sample> from_json_line(std::string_view line)
 		get(*it, "charging", s.headset.charging);
 		get(*it, "gpu_ms", s.headset.gpu_ms);
 		get(*it, "cpu_ms", s.headset.cpu_ms);
+		get(*it, "compositor_dropped", s.headset.compositor_dropped);
+		get(*it, "compositor_stale", s.headset.compositor_stale);
+		get(*it, "compositor_gpu_ms", s.headset.compositor_gpu_ms);
+		get(*it, "app_gpu_ms", s.headset.app_gpu_ms);
+		get(*it, "runtime_m2p_ms", s.headset.runtime_m2p_ms);
+		get(*it, "cpu_util_pct", s.headset.cpu_util_pct);
+		get(*it, "gpu_util_pct", s.headset.gpu_util_pct);
 	}
 	if (auto it = j.find("encoder"); it != j.end() and it->is_object())
 	{
@@ -407,6 +459,19 @@ std::optional<sample> from_json_line(std::string_view line)
 		get(*it, "half_rate_recoveries", s.app.half_rate_recoveries);
 	}
 	get(j, "motion_to_photon_ms_p95", s.motion_to_photon_ms_p95);
+	if (auto it = j.find("frames"); it != j.end() and it->is_object())
+	{
+		get(*it, "display", s.frames.display);
+		get(*it, "repeated", s.frames.repeated);
+		get(*it, "skipped", s.frames.skipped);
+		get(*it, "link", s.frames.link);
+		get(*it, "app", s.frames.app);
+		get(*it, "encode", s.frames.encode);
+		get(*it, "decode", s.frames.decode);
+		get(*it, "compositor", s.frames.compositor);
+		get(*it, "tracking", s.frames.tracking);
+		get(*it, "unattributed", s.frames.unattributed);
+	}
 	if (auto it = j.find("app_metrics"); it != j.end() and it->is_object())
 		for (auto & [k, v]: it->items())
 			if (v.is_number())
@@ -417,6 +482,150 @@ std::optional<sample> from_json_line(std::string_view line)
 			if (v.is_string())
 				s.app_warnings.push_back(v.get<std::string>());
 	return s;
+}
+
+// --- judder (GRID #3095 M6c) -------------------------------------------------------------
+
+namespace
+{
+// Stage durations of a frame row in nanoseconds, -1 when either end is unknown, in the order
+// app (wake→submit), gpu, compositor, encoder, transit (last shard sent→received), spread
+// (first→last packet received), decode.
+constexpr size_t stage_count = 7;
+using stage_ns = std::array<int64_t, stage_count>;
+constexpr std::array<uint32_t sample::frame_stats::*, stage_count> stage_class{
+        &sample::frame_stats::app,
+        &sample::frame_stats::app,
+        &sample::frame_stats::encode,
+        &sample::frame_stats::encode,
+        &sample::frame_stats::link,
+        &sample::frame_stats::link,
+        &sample::frame_stats::decode,
+};
+
+int64_t span_ns(int64_t from, int64_t to)
+{
+	return (from and to and to >= from) ? to - from : -1;
+}
+
+stage_ns stages(const frame_row & r)
+{
+	return {span_ns(r.wake, r.submit), span_ns(r.submit, r.gpu), span_ns(r.comp0, r.comp1), span_ns(r.enc0, r.enc1), span_ns(r.send1, r.rx1), span_ns(r.rx0, r.rx1), span_ns(r.dec0, r.dec1)};
+}
+
+int64_t median(std::vector<int64_t> & v)
+{
+	if (v.empty())
+		return -1;
+	auto mid = v.begin() + v.size() / 2;
+	std::nth_element(v.begin(), mid, v.end());
+	return *mid;
+}
+
+// One application frame across its streams: the headset shows it when every stream arrived, so
+// the latest blit/display and the largest stage duration stand for the frame.
+struct frame
+{
+	uint64_t n;
+	int32_t shown; // -1: no feedback
+	int64_t pd, blit, disp, pose_t;
+	int32_t pose_flags;
+	stage_ns st;
+};
+} // namespace
+
+sample::frame_stats judder_stats(std::span<const frame_row> rows, int64_t period_ns)
+{
+	sample::frame_stats out;
+	if (rows.empty() or period_ns <= 0)
+		return out;
+	std::vector<frame> frames;
+	for (const auto & r: rows)
+	{
+		if (frames.empty() or frames.back().n != r.n)
+		{
+			frames.push_back({r.n, r.shown, r.pd, r.blit, r.disp, r.pose_t, r.pose_flags, stages(r)});
+			continue;
+		}
+		frame & f = frames.back();
+		f.shown = std::max(f.shown, r.shown);
+		f.blit = std::max(f.blit, r.blit);
+		f.disp = std::max(f.disp, r.disp);
+		stage_ns st = stages(r);
+		for (size_t i = 0; i < stage_count; ++i)
+			f.st[i] = std::max(f.st[i], st[i]);
+	}
+	auto hitch = [period_ns](const frame & f) {
+		return f.shown != 1 or (f.disp and f.pd and f.disp - f.pd > period_ns / 2);
+	};
+	// Baselines: the window's own on-time new frames (not a rolling history, see the header).
+	std::array<std::vector<int64_t>, stage_count> seen;
+	for (const auto & f: frames)
+		if (not hitch(f))
+			for (size_t i = 0; i < stage_count; ++i)
+				if (f.st[i] >= 0)
+					seen[i].push_back(f.st[i]);
+	stage_ns med;
+	for (size_t i = 0; i < stage_count; ++i)
+		med[i] = median(seen[i]);
+
+	// The stage a hitch frame used the budget on, as a frame_stats member.
+	auto classify = [&](const frame & f) -> uint32_t sample::frame_stats::* {
+		constexpr int32_t tracked = 0b1100; // orientation and position tracked
+		if ((f.pose_flags >= 0 and (f.pose_flags & tracked) != tracked) or (f.pose_t and f.disp and f.disp - f.pose_t > 2 * period_ns))
+			return &sample::frame_stats::tracking;
+		if (f.shown < 0)
+			return &sample::frame_stats::link; // nothing came back: the shards never reached the headset
+		int best = -1;
+		int64_t excess = 0;
+		for (size_t i = 0; i < stage_count; ++i)
+			if (f.st[i] >= 0 and med[i] >= 0 and f.st[i] - med[i] > excess)
+			{
+				excess = f.st[i] - med[i];
+				best = int(i);
+			}
+		if (best >= 0 and excess > period_ns / 2)
+			return stage_class[size_t(best)];
+		if (f.blit and f.pd and f.blit <= f.pd)
+			return &sample::frame_stats::compositor;
+		return &sample::frame_stats::unattributed;
+	};
+
+	out.display = 0;
+	for (size_t i = 0; i < frames.size(); ++i)
+	{
+		const frame & f = frames[i];
+		if (f.shown > 0)
+			out.display += f.shown;
+		if (f.shown <= 0)
+			out.skipped++;
+		else if (f.shown > 1)
+			out.repeated += uint32_t(f.shown - 1);
+		if (not hitch(f))
+			continue;
+		// A repeated frame filled the slot of the next one (the late one), so that frame is the
+		// cause, as in the GRID reader; the next frame counts again for its own lateness. With the
+		// successor outside the window the repeat stays unattributed rather than guessed.
+		if (f.shown > 1 and not(f.disp and f.pd and f.disp - f.pd > period_ns / 2))
+		{
+			if (i + 1 >= frames.size())
+				out.unattributed++;
+			else
+				out.*classify(hitch(frames[i + 1]) ? frames[i + 1] : f) += 1;
+			continue;
+		}
+		out.*classify(f) += 1;
+	}
+	return out;
+}
+
+std::string_view dominant_class(const sample::frame_stats & f)
+{
+	std::pair<uint32_t, std::string_view> best{0, "unattributed"};
+	for (auto [count, name]: {std::pair<uint32_t, std::string_view>{f.link, "link"}, {f.app, "app"}, {f.encode, "encode"}, {f.decode, "decode"}, {f.compositor, "headset-compositor"}, {f.tracking, "tracking"}})
+		if (count > best.first)
+			best = {count, name};
+	return best.second;
 }
 
 // --- telemetry connector -----------------------------------------------------------------
