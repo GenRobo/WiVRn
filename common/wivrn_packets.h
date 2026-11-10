@@ -721,6 +721,16 @@ struct telemetry
 	uint8_t network_kind;   // 0 unknown, 1 wifi, 2 usb-ethernet, 3 ethernet, 4 usb
 	int16_t rssi_dbm;       // wifi only, else INT16_MIN
 	uint32_t link_mbps;     // reported link speed, 0 unknown
+
+	// Headset runtime counters (GRID #3095 M6c) from XR_META_performance_metrics, read once per
+	// second with the rest; 0xFFFF / 255 when the extension, the counter or the value is absent.
+	uint16_t compositor_dropped;    // /perfmetrics_meta/compositor/dropped_frame_count
+	uint16_t compositor_stale;      // runtime stale-frame counter, see docs/health.md
+	uint16_t compositor_gpu_ms_x10; // /perfmetrics_meta/compositor/gpu_frametime
+	uint16_t app_gpu_ms_x10;        // /perfmetrics_meta/app/gpu_frametime
+	uint16_t runtime_m2p_ms_x10;    // /perfmetrics_meta/app/motion_to_photon_latency
+	uint8_t cpu_util_pct;           // /perfmetrics_meta/device/cpu_utilization_average
+	uint8_t gpu_util_pct;           // /perfmetrics_meta/device/gpu_utilization
 };
 
 // when changing this, also make sure there are handlers in wivrn_session, etc. or compilation will fail

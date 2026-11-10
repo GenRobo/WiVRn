@@ -182,6 +182,9 @@ void test_rules_do_not_cross_fire()
 	CHECK(only([](int64_t t) { auto s = clean_at(t); s.headset.battery_pct = 9; s.headset.charging = false; return s; }) == std::set<rule_id>{rule_id::headset_battery});
 	CHECK(only([](int64_t t) { auto s = clean_at(t); s.headset.display_hz = 90; return s; }) == std::set<rule_id>{rule_id::refresh_mismatch});
 	CHECK(only([](int64_t t) { auto s = clean_at(t); s.link.send_ms_p95 = 4.5f; return s; }) == std::set<rule_id>{rule_id::link_slow});
+	// Judder needs the frame ring's counts: a clean second with 72 display frames is silent, 3 % is not.
+	CHECK(only([](int64_t t) { auto s = clean_at(t); s.frames.display = 72; return s; }).empty());
+	CHECK(only([](int64_t t) { auto s = clean_at(t); s.frames.display = 100; s.frames.repeated = 2; s.frames.skipped = 1; s.frames.link = 3; return s; }) == std::set<rule_id>{rule_id::judder});
 	// Unknown headset fields (milestone 1 server, no telemetry) never fire headset rules.
 	CHECK(only([](int64_t t) { auto s = clean_at(t); s.headset = {}; s.link.frames_incomplete = -1; return s; }).empty());
 }
@@ -204,10 +207,11 @@ void test_thresholds()
 	CHECK(replay(session, o).empty());
 	CHECK(replay(session, d) == std::set<rule_id>{rule_id::link_loss});
 
-	for (auto id: {rule_id::link_loss, rule_id::app_slow, rule_id::refresh_mismatch})
+	for (auto id: {rule_id::link_loss, rule_id::app_slow, rule_id::refresh_mismatch, rule_id::judder})
 		CHECK(rule_from_name(name(id)) == id);
 	CHECK(!rule_from_name("bogus"));
-	CHECK(rules().size() == 9);
+	CHECK(rules().size() == 10);
+	CHECK(d.get("judder.pct") == 2);
 }
 
 void test_histogram()
@@ -267,7 +271,218 @@ void test_json_round_trip()
 	// Records written before the counters existed read back as zero.
 	auto old = from_json_line(R"({"t":1,"app":{"hz":66,"cpu_ms":15.0,"gpu_ms":0.14,"late_pct":3.0}})");
 	CHECK(old and old->app.half_rate_probes == 0 and old->app.half_rate_recoveries == 0 and old->app.hz == 66);
-	CHECK(to_json_line(clean_at(0), {}).find("app_") == std::string::npos); // nothing posted: keys absent
+	CHECK(old and old->headset.compositor_dropped == -1 and old->headset.runtime_m2p_ms == -1 and old->frames.display == -1);
+	CHECK(to_json_line(clean_at(0), {}).find("app_metrics") == std::string::npos); // nothing posted: keys absent
+	CHECK(to_json_line(clean_at(0), {}).find("app_warnings") == std::string::npos);
+
+	// Headset runtime counters and the frame stats (GRID #3095 M6c).
+	s.headset.compositor_dropped = 2;
+	s.headset.compositor_stale = -1;
+	s.headset.compositor_gpu_ms = 3.1f;
+	s.headset.app_gpu_ms = 4.7f;
+	s.headset.runtime_m2p_ms = 41.2f;
+	s.headset.cpu_util_pct = 63;
+	s.headset.gpu_util_pct = -1;
+	s.frames = {.display = 79, .repeated = 7, .skipped = 0, .link = 14, .compositor = 1, .excess_stage = "decode", .excess_ms = 4.5f};
+	back = from_json_line(to_json_line(s, {}));
+	CHECK(back and back->headset.compositor_dropped == 2 and back->headset.compositor_stale == -1);
+	CHECK(back and std::abs(back->headset.compositor_gpu_ms - 3.1f) < 1e-3 and std::abs(back->headset.app_gpu_ms - 4.7f) < 1e-3);
+	CHECK(back and std::abs(back->headset.runtime_m2p_ms - 41.2f) < 1e-3 and back->headset.cpu_util_pct == 63 and back->headset.gpu_util_pct == -1);
+	CHECK(back and back->frames.display == 79 and back->frames.repeated == 7 and back->frames.link == 14 and back->frames.compositor == 1 and back->frames.app == 0);
+	CHECK(back and back->frames.excess_stage == "decode" and std::abs(back->frames.excess_ms - 4.5f) < 1e-3);
+}
+
+// --- judder (GRID #3095 M6c): settled rows classified by stage, the rule over the samples ---
+
+constexpr int64_t period = 13'888'888; // 72 Hz
+constexpr int frames_per_s = 72;
+
+/// A clean row shaped like the 2026-11-10 laptop record: the pacer wakes the application
+/// 3.6 periods (50 ms) before the slot, the pose is 2.6 ms old at wake, every stage at a typical
+/// cost (10.9 ms from wake to decode end, so decode ends 39 ms before the slot), displayed in
+/// the slot: 53 ms from pose to photon. Stream 1 encodes 5 ms longer than stream 0, always.
+frame_row clean_row(uint64_t n, uint8_t s)
+{
+	frame_row r;
+	r.n = n;
+	r.s = s;
+	r.pd = 1'000'000'000 + int64_t(n) * period;
+	r.wake = r.pd - 50'000'000;
+	r.begin = r.wake + 100'000;
+	r.submit = r.wake + 2'000'000;
+	r.gpu = r.submit + 500'000;
+	r.comp0 = r.gpu + 100'000;
+	r.comp1 = r.comp0 + 1'000'000;
+	r.enc0 = r.comp1 + 50'000;
+	r.enc1 = r.enc0 + 2'500'000 + (s == 1 ? 5'000'000 : 0);
+	r.send0 = r.enc1 + 50'000;
+	r.send1 = r.send0 + 600'000;
+	r.rx0 = r.send0 + 700'000;
+	r.rx1 = r.send1 + 800'000;
+	r.dec0 = r.rx1 + 50'000;
+	r.dec1 = r.dec0 + 3'000'000;
+	r.blit = r.pd - 1'000'000;
+	r.disp = r.pd;
+	r.shown = 1;
+	r.bytes = 41230;
+	r.idr = 0;
+	r.shards = 31;
+	r.lost = 0;
+	r.pose_t = r.wake - 2'600'000;
+	r.pose_flags = 15;
+	r.off_ns = 1'170'500;
+	return r;
+}
+
+/// One second of a two-stream ring (sorted by n, s), `fault` applied to every row of frames
+/// where `n % 10 == 5`, whose predecessor is then shown twice.
+std::vector<frame_row> second_of_rows(int64_t first_n, void (*fault)(frame_row &), bool every_frame = false)
+{
+	std::vector<frame_row> rows;
+	for (int64_t n = first_n; n < first_n + frames_per_s; ++n)
+		for (uint8_t s = 0; s < 2; ++s)
+		{
+			frame_row r = clean_row(uint64_t(n), s);
+			if (fault and (every_frame or n % 10 == 5))
+				fault(r);
+			if (fault and not every_frame and n % 10 == 4)
+				r.shown = 2;
+			rows.push_back(r);
+		}
+	return rows;
+}
+
+void link_fault(frame_row & r)
+{
+	// The last shard took 12 ms longer to arrive; everything after it shifts and the frame
+	// lands one period late.
+	constexpr int64_t extra = 12'000'000;
+	r.rx1 += extra;
+	r.dec0 += extra;
+	r.dec1 += extra;
+	r.disp += period;
+}
+
+void compositor_fault(frame_row & r)
+{
+	// Decoded 39 ms early as always, the headset still showed it a period late.
+	r.disp += period;
+}
+
+void compositor_skip(frame_row & r)
+{
+	// Decoded 39 ms early, never shown: the feedback carries the decode times and no blit.
+	r.blit = r.disp = 0;
+	r.shown = 0;
+}
+
+void unexplained_fault(frame_row & r)
+{
+	// The whole chain ran 32 ms late (every stage at its usual cost) and decode took 4 ms
+	// longer, so the frame was decoded 3 ms before its slot and shown a period late: no stage
+	// exceeds its baseline by half a period and the decode did not finish early either.
+	constexpr int64_t shift = 32'000'000;
+	for (int64_t * t: {&r.wake, &r.begin, &r.submit, &r.gpu, &r.comp0, &r.comp1, &r.enc0, &r.enc1, &r.send0, &r.send1, &r.rx0, &r.rx1, &r.dec0, &r.dec1, &r.pose_t})
+		*t += shift;
+	r.dec1 += 4'000'000;
+	r.disp += period;
+}
+
+void test_judder_stats()
+{
+	judder_classifier clean_judder;
+	auto clean = clean_judder.step(second_of_rows(0, nullptr), period);
+	CHECK(clean.display == frames_per_s and clean.repeated == 0 and clean.skipped == 0);
+	CHECK(clean.link == 0 and clean.compositor == 0 and clean.tracking == 0 and clean.unattributed == 0);
+	CHECK(judder_classifier().step({}, period).display == -1);
+
+	// 7 faulty frames per second: each repeats its predecessor (blamed on the late frame, as the
+	// GRID reader does) and is late itself. The pose is 53 ms old at photon on every frame: that
+	// is the pipeline latency, never a tracking fault.
+	auto link = judder_classifier().step(second_of_rows(0, link_fault), period);
+	CHECK(link.display == frames_per_s + 7 and link.repeated == 7 and link.skipped == 0);
+	CHECK(link.link == 14 and link.compositor == 0 and link.app == 0 and link.decode == 0 and link.tracking == 0 and link.unattributed == 0);
+	CHECK(dominant_class(link) == "link");
+
+	auto compositor = judder_classifier().step(second_of_rows(0, compositor_fault), period);
+	CHECK(compositor.display == frames_per_s + 7 and compositor.repeated == 7);
+	CHECK(compositor.compositor == 14 and compositor.link == 0 and compositor.tracking == 0 and compositor.unattributed == 0);
+	CHECK(dominant_class(compositor) == "compositor");
+	auto skipped = judder_classifier().step(second_of_rows(0, compositor_skip), period);
+	CHECK(skipped.display == frames_per_s and skipped.skipped == 7 and skipped.repeated == 7);
+	CHECK(skipped.compositor == 14 and skipped.link == 0 and skipped.tracking == 0 and skipped.unattributed == 0);
+
+	// No feedback at all is a skip blamed on the link; an untracked pose, or one older than two
+	// periods when the application woke, wins over everything.
+	auto lost = judder_classifier().step(second_of_rows(0, [](frame_row & r) { r.rx0 = r.rx1 = r.dec0 = r.dec1 = r.blit = r.disp = 0; r.shown = -1; r.lost = -1; }), period);
+	CHECK(lost.skipped == 7 and lost.display == frames_per_s and lost.link == 14);
+	auto untracked = judder_classifier().step(second_of_rows(0, [](frame_row & r) { link_fault(r); r.pose_flags = 3; }), period);
+	CHECK(untracked.tracking == 14 and untracked.link == 0);
+	auto stale = judder_classifier().step(second_of_rows(0, [](frame_row & r) { link_fault(r); r.pose_t = r.wake - 3 * period; }), period);
+	CHECK(stale.tracking == 14 and stale.link == 0);
+
+	// Nothing explains the frame: unattributed, with the largest excess kept for the message.
+	auto unexplained = judder_classifier().step(second_of_rows(0, unexplained_fault), period);
+	CHECK(unexplained.unattributed == 14 and unexplained.compositor == 0 and unexplained.decode == 0);
+	CHECK(unexplained.excess_stage == "decode" and std::abs(unexplained.excess_ms - 4.0f) < 0.01f);
+	CHECK(dominant_class(unexplained) == "unattributed");
+	CHECK(dominant_class({}) == "unattributed");
+
+	// Baselines are per stream and roll over seconds: stream 1's slower encoder is its normal,
+	// and a second in which every frame's transit is slow is still link once a clean second
+	// taught the medians (a fresh classifier sees no excess: every frame is the median).
+	auto stream0 = judder_classifier().step(second_of_rows(0, [](frame_row & r) { if (r.s == 0) link_fault(r); else r.disp += period; }), period);
+	CHECK(stream0.link == 14 and stream0.encode == 0);
+	judder_classifier rolling;
+	rolling.step(second_of_rows(0, nullptr), period);
+	auto all_late = rolling.step(second_of_rows(frames_per_s, link_fault, true), period);
+	CHECK(all_late.display == frames_per_s and all_late.link == frames_per_s and all_late.unattributed == 0);
+	auto fresh = judder_classifier().step(second_of_rows(0, link_fault, true), period);
+	CHECK(fresh.link == 0 and fresh.unattributed + fresh.compositor == frames_per_s);
+}
+
+void test_judder_rule()
+{
+	const auto th = thresholds::defaults();
+	auto session_with = [](void (*fault)(frame_row &), int seconds, int32_t dropped_per_s = -1) {
+		std::vector<sample> session;
+		judder_classifier judder;
+		for (int i = 0; i < seconds; ++i)
+		{
+			sample s = clean_at(1000 + i);
+			s.headset.display_hz = s.headset.requested_hz = 72;
+			s.frames = judder.step(second_of_rows(int64_t(i) * frames_per_s, fault), period);
+			if (dropped_per_s >= 0)
+				s.headset.compositor_dropped = 1000 + dropped_per_s * i; // cumulative, as Horizon OS reports it
+			session.push_back(s);
+		}
+		return session;
+	};
+	CHECK(replay(session_with(nullptr, 10), th).empty());
+	CHECK(replay(session_with(link_fault, 10), th) == std::set<rule_id>{rule_id::judder});
+
+	// Fires on the third faulty second and names the class; the runtime's own dropped count
+	// (30 per second against 14 link hitches) overrules the ring; a raised threshold keeps it quiet.
+	auto fired = [&](void (*fault)(frame_row &), int32_t dropped_per_s = -1) {
+		rule_state st;
+		auto session = session_with(fault, 5, dropped_per_s);
+		std::vector<rule_state::event> events;
+		for (size_t i = 0; i < session.size(); ++i)
+		{
+			auto e = st.step(std::span<const sample>(session.data(), i + 1), th);
+			if (!e.empty())
+				CHECK(i == 2);
+			events.insert(events.end(), e.begin(), e.end());
+		}
+		CHECK(events.size() == 1 and events[0].id == rule_id::judder and events[0].fired);
+		return events.empty() ? std::string() : events[0].message;
+	};
+	// 8 of 80 display frames in the third second (frames 144..215 hold eight n % 10 == 5).
+	CHECK(fired(link_fault) == "Judder: 10.0 % of frames repeated or skipped, mostly link");
+	CHECK(fired(compositor_fault) == "Judder: 10.0 % of frames repeated or skipped, mostly compositor");
+	CHECK(fired(link_fault, 30) == "Judder: 10.0 % of frames repeated or skipped, mostly compositor");
+	CHECK(fired(unexplained_fault) == "Judder: 10.0 % of frames repeated or skipped, mostly unattributed (largest excess decode 4.0 ms)");
+	CHECK(replay(session_with(link_fault, 10), thresholds::with({{"judder.pct", 12}})).empty());
 }
 
 // --- telemetry connector (milestone 4): inbound lines are validated, counted and never crash ---
@@ -439,6 +654,8 @@ int main(int argc, char ** argv)
 	test_thresholds();
 	test_histogram();
 	test_json_round_trip();
+	test_judder_stats();
+	test_judder_rule();
 	test_connector_parse();
 	test_connector_line_buffer();
 	test_app_warning_cooldown();

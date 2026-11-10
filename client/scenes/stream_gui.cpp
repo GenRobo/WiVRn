@@ -658,7 +658,7 @@ void scenes::stream::draw_warning(XrTime predicted_display_time)
 }
 
 // Rule order of health::rule_id on the server (docs/health.md).
-static constexpr std::array<const char *, 9> health_rule_names{"link_loss", "link_slow", "encoder_busy", "app_slow", "app_late", "headset_decode", "headset_thermal", "headset_battery", "refresh_mismatch"};
+static constexpr std::array<const char *, 10> health_rule_names{"link_loss", "link_slow", "encoder_busy", "app_slow", "app_late", "headset_decode", "headset_thermal", "headset_battery", "refresh_mismatch", "judder"};
 
 void scenes::stream::gui_health_row()
 {

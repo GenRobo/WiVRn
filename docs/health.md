@@ -13,11 +13,12 @@ connector below carry the same counts once per second.
 The headset sends `from_headset::telemetry` once per second while streaming: frames received,
 incomplete, decoded, dropped before display and repeated; decode time p95; its own CPU and GPU
 time; the active refresh rate; the Android thermal status; the requested performance levels;
-and the active network (kind, Wi-Fi RSSI, link speed). The server merges it into the sample,
-so the headset's own counts are authoritative where it has them. The server answers with
-`to_headset::health`, the last sample, which the headset's Statistics tab shows as its first row.
-Both packets change the protocol version: a headset app without them is refused at the lobby
-with the usual *incompatible* message.
+the active network (kind, Wi-Fi RSSI, link speed); and, when the runtime offers
+`XR_META_performance_metrics`, its [runtime counters](#headset-runtime-counters). The server
+merges it into the sample, so the headset's own counts are authoritative where it has them. The
+server answers with `to_headset::health`, the last sample, which the headset's Statistics tab
+shows as its first row. Both packets change the protocol version: a headset app without them is
+refused at the lobby with the usual *incompatible* message.
 
 Warnings reach the headset as `server_message::kind::warning`, drawn by the headset app on its
 own composition layer in the VIEW reference space (locked to the view, so it does not swim with
@@ -70,6 +71,25 @@ unknown (`-1`) until the headset reports them (milestone 3) and never fire a rul
 | `headset_thermal` | thermal status ≥ `headset_thermal.status` (3, Android "severe") | Headset is hot and throttling. |
 | `headset_battery` | battery < `headset_battery.pct` (15) and not charging | Headset battery low… |
 | `refresh_mismatch` | active refresh differs from requested by > `refresh_mismatch.hz` (1) | Headset running at X Hz, not the requested Y Hz. |
+| `judder` | repeated + skipped frames > `judder.pct` (2) % of the display frames settled that second, from the [frame record](#frame-record)'s ring (`frames` below); the 3 s persistence of every rule makes it "for 3 s" | Judder: X % of frames repeated or skipped, mostly *class* |
+
+`judder` names the class that explains most hitches over the three seconds it took to fire,
+attributed per frame like `vivarium-teleop xr trace` (GRID#3095 design 6.6, calibrated on the
+2026-11-10 laptop record: frames land in their slot, the pacer wakes the application 3.6 periods
+ahead, decode ends 36 ms before the slot, the pose is 2.6 ms old at wake and 53 ms old at
+photon) but simplified so it runs on the ring's fields once per second: `tracking` (pose not
+tracked, or older than two periods **when the application woke** — its age at photon is the
+pipeline latency, not a tracking fault); otherwise the stage whose duration exceeds its stream's
+rolling median of the last 300 on-time frames by more than half a period — `app` (wake to
+submit, GPU), `encode` (compositor, encoder), `link` (last shard sent to received, first to last
+packet received; also a frame with no feedback at all), `decode`; otherwise `compositor` (the
+headset's) when the frame was decoded at least half a period before its predicted display time
+and still repeated, skipped or late; else `unattributed`, in which case the message adds the
+largest excess seen (`mostly unattributed (largest excess decode 4.0 ms)`). The headset runtime's
+own `compositor_dropped` increase over those seconds counts for `compositor` as well. A repeated
+frame is blamed on the frame after it (the late one), as the reader does. Not here: the
+`session`, `app-half-rate` and `content-cadence` classes (no event or viewer input), and a
+repeat whose successor settles in the next second is `unattributed`.
 
 Thresholds come from measurements on 2026-10-29/30 (Quest 3, RTX 3080 Ti laptop, RTX desktop,
 HEVC 10-bit, 50.8 Mb/s per eye): clean sessions showed 0–12 IDR requests per session and
@@ -85,10 +105,13 @@ a competing browser dropped the application from 120 Hz to 66–82 Hz.
  "link":{"shards_sent":4576,"bytes_sent":6105057,"send_ms_p95":0.0,"receive_spread_ms_p95":0.38,
          "frames_incomplete":-1,"idr_lost_ref":0,"idr_unsent_gap":0},
  "headset":{"decode_ms_p95":4.4,"display_jitter_ms_p95":0.1,"frames_repeated":0,"display_hz":120,
-            "requested_hz":120,"thermal_status":-1,"battery_pct":62,"charging":true,"gpu_ms":-1,"cpu_ms":-1},
+            "requested_hz":120,"thermal_status":-1,"battery_pct":62,"charging":true,"gpu_ms":-1,"cpu_ms":-1,
+            "compositor_dropped":0,"compositor_stale":-1,"compositor_gpu_ms":2.1,"app_gpu_ms":3.4,
+            "runtime_m2p_ms":38.2,"cpu_util_pct":41,"gpu_util_pct":57},
  "encoder":{"presented":360,"skipped":0,"encode_ms_p95":2.8,"util_pct":29},
  "app":{"hz":120,"cpu_ms":3.3,"gpu_ms":0.15,"late_pct":0.0,"half_rate_probes":0,"half_rate_recoveries":0},
  "motion_to_photon_ms_p95":26.5,
+ "frames":{"display":120,"repeated":0,"skipped":0,"link":0,"app":0,"encode":0,"decode":0,"compositor":0,"tracking":0,"unattributed":0},
  "warnings":[]}
 ```
 
@@ -104,6 +127,13 @@ a competing browser dropped the application from 120 Hz to 66–82 Hz.
 - `app_metrics` appears when an application posted metrics on the [connector](#connector)
   during that second, `app_metrics_dropped` when it posted lines the server rejected, and
   `app_warnings` lists the application warnings still within their ttl.
+- `frames` is the judder rule's input: the application frames that settled this second (the
+  [frame record](#frame-record)'s rule, every stream), `display` the display frames they
+  account for (the sum of `shown`; `-1` while none settled), `repeated` and `skipped` the
+  hitches, and the class counts the hitches by cause as the `judder` rule attributes them
+  (repeats and late frames both count, so the classes can add up to more than `repeated +
+  skipped`); `excess_stage` / `excess_ms` the largest stage excess among the unattributed ones
+  (`""` / `-1` when none).
 - Event lines (`"type":"event"`, `"type":"warning"`) are interleaved with the samples in the
   connector stream (below); the file holds them too, so a reader must look at `type`.
 
@@ -111,6 +141,31 @@ When a rule fires, `wivrn-health-event-<time>.json` is written with the sample a
 600 frames per stream from the [frame record](#frame-record)'s ring (`streams[s]` is a list of
 `frame` objects, times relative to `t0_mono_ns`), so the seconds before the event can be
 inspected frame by frame whether or not the frame record is on.
+
+### Headset runtime counters
+
+The headset app asks for `XR_META_performance_metrics` and, when the runtime offers it (the
+client logs `XR_META_performance_metrics: available|absent` and then the runtime's counter list
+as `XR_META_performance_metrics counters (N): …`), enables it with
+`xrSetPerformanceMetricsStateMETA` and reads these counters with
+`xrQueryPerformanceMetricsCounterMETA` once per second, with the rest of the telemetry:
+
+| Sample field (`headset.*`) | Counter path | Unit |
+| --- | --- | --- |
+| `compositor_dropped` | `/perfmetrics_meta/compositor/dropped_frame_count` | frames, over the runtime's own interval |
+| `compositor_stale` | `/perfmetrics_meta/compositor/stale_frame_count` when the runtime lists it; else the refresh rate minus `/perfmetrics_meta/compositor/frames_per_second` when it lists that | frames |
+| `compositor_gpu_ms` | `/perfmetrics_meta/compositor/gpu_frametime` | ms |
+| `app_gpu_ms` | `/perfmetrics_meta/app/gpu_frametime` | ms |
+| `runtime_m2p_ms` | `/perfmetrics_meta/app/motion_to_photon_latency` | ms |
+| `cpu_util_pct` | `/perfmetrics_meta/device/cpu_utilization_average` | % |
+| `gpu_util_pct` | `/perfmetrics_meta/device/gpu_utilization` | % |
+
+A path the runtime does not list (the extension's specification only says which paths *may*
+exist) is not queried and its field stays unknown (`-1`; `0xFFFF` / `255` on the wire). The
+two `compositor_stale` sources are not in the specification's list at all: the field is unknown
+until a runtime is seen listing one of them. The counters are the runtime's view of the headset
+compositor, so a repeated frame with `compositor_dropped` rising and the pipeline on time is the
+headset, not the stream.
 
 Reading a record with Python:
 

@@ -382,6 +382,21 @@ private:
 	std::atomic<uint32_t> device_link_mbps{0};
 	void observe_decode_ms(float ms);
 	void send_telemetry(XrTime now);
+	// Headset runtime counters (GRID #3095 M6c): XR_META_performance_metrics paths, resolved once
+	// against the runtime's own list in setup_runtime_counters; XR_NULL_PATH when it lacks one.
+	struct runtime_counters_t
+	{
+		XrPath compositor_dropped = XR_NULL_PATH;
+		XrPath compositor_stale = XR_NULL_PATH;
+		XrPath compositor_fps = XR_NULL_PATH;
+		XrPath compositor_gpu = XR_NULL_PATH;
+		XrPath app_gpu = XR_NULL_PATH;
+		XrPath app_m2p = XR_NULL_PATH;
+		XrPath cpu_util = XR_NULL_PATH;
+		XrPath gpu_util = XR_NULL_PATH;
+		bool enabled = false;
+	} runtime_counters;
+	void setup_runtime_counters();
 	thread_safe<std::optional<to_headset::health>> last_health;
 	struct gui_warning_t
 	{

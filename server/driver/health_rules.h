@@ -8,6 +8,8 @@
  */
 #pragma once
 
+#include "health_frames.h"
+
 #include <array>
 #include <cstdint>
 #include <map>
@@ -65,6 +67,14 @@ struct sample
 		bool charging = false;
 		float gpu_ms = -1;
 		float cpu_ms = -1;
+		// Runtime counters (GRID #3095 M6c, XR_META_performance_metrics); -1 unknown.
+		int32_t compositor_dropped = -1;
+		int32_t compositor_stale = -1;
+		float compositor_gpu_ms = -1;
+		float app_gpu_ms = -1;
+		float runtime_m2p_ms = -1;
+		int32_t cpu_util_pct = -1;
+		int32_t gpu_util_pct = -1;
 	} headset;
 
 	struct
@@ -87,6 +97,26 @@ struct sample
 
 	float motion_to_photon_ms_p95 = -1;
 
+	/// Display frames settled this second, from the frame ring (GRID #3095 M6c,
+	/// judder_classifier); `display` is -1 while no row settled. The per-class counts are the
+	/// hitches (repeats, skips and frames displayed more than half a period late) by the stage
+	/// that used the budget; `excess_*` the largest stage excess among the unattributed ones.
+	struct frame_stats
+	{
+		int32_t display = -1;
+		uint32_t repeated = 0;
+		uint32_t skipped = 0;
+		uint32_t link = 0;
+		uint32_t app = 0;
+		uint32_t encode = 0;
+		uint32_t decode = 0;
+		uint32_t compositor = 0; // headset compositor: decoded in time, still repeated, skipped or late
+		uint32_t tracking = 0;
+		uint32_t unattributed = 0;
+		std::string excess_stage; // app, gpu, compositor, encode, transit, spread, decode
+		float excess_ms = -1;
+	} frames;
+
 	/// Metrics posted by applications on the telemetry connector (milestone 4): the last value
 	/// posted for each name during this second.
 	std::map<std::string, double> app_metrics;
@@ -107,6 +137,7 @@ enum class rule_id : uint8_t
 	headset_thermal,
 	headset_battery,
 	refresh_mismatch,
+	judder,
 };
 
 std::string_view name(rule_id);
@@ -166,13 +197,55 @@ private:
 		bool fired = false;
 		int64_t last_fired_t = INT64_MIN;
 	};
-	std::array<per_rule, 9> state{};
+	std::array<per_rule, 10> state{};
 };
 
 /// One JSON line per sample, the flight-recorder format documented in docs/health.md.
 std::string to_json_line(const sample &, std::span<const rule_id> active);
 /// Parse a line written by to_json_line (used by tests and the connector).
 std::optional<sample> from_json_line(std::string_view);
+
+/// Median of the last `window` values pushed.
+class rolling_median
+{
+public:
+	static constexpr size_t window = 300;
+	void push(int64_t);
+	/// -1 while empty.
+	int64_t median() const;
+
+private:
+	std::vector<int64_t> fifo;
+	std::vector<int64_t> sorted;
+	size_t next = 0;
+};
+
+/// The judder rule's input. `step` takes one second of settled frame rows, every stream, sorted
+/// by (n, s), with the display period in effect, learns the stage baselines from its on-time
+/// frames and classifies its hitches. Kind per frame: `shown` 0 (or no feedback) is a skip,
+/// `shown` above 1 is `shown - 1` repeats (blamed on the next frame, the late one, as the GRID
+/// reader does), and a new frame displayed more than half a period after `pd` is late. Each is
+/// attributed like `vivarium-teleop xr trace` (design 6.6, calibrated on the 2026-11-10 laptop
+/// record): tracking (pose not tracked, or older than two periods when the application woke —
+/// never its age at display, which is the pipeline latency); the stage with the largest excess
+/// over its stream's rolling median of the last 300 on-time frames when above half a period
+/// (app = wake→submit and gpu, encode = compositor and encoder, link = transit and spread,
+/// decode); a frame without feedback is link; headset compositor when the frame was decoded at
+/// least half a period before `pd` and still repeated, skipped or late; else unattributed.
+/// Simplifications: no session, half-rate or content-cadence classes (no event or viewer input
+/// here); a repeat whose successor settles in a later second stays unattributed.
+class judder_classifier
+{
+public:
+	static constexpr size_t stage_count = 7; // app, gpu, compositor, encoder, transit, spread, decode
+	sample::frame_stats step(std::span<const frame_row> rows, int64_t period_ns);
+
+private:
+	std::array<std::array<rolling_median, stage_count>, frame_ring::streams> medians;
+};
+/// The dominant class name of a stats sum: the largest count, "unattributed" when all are zero
+/// (headset compositor is named "compositor").
+std::string_view dominant_class(const sample::frame_stats &);
 
 // --- telemetry connector (milestone 4) ---------------------------------------------------
 

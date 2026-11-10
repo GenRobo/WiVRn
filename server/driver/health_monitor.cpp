@@ -11,6 +11,7 @@
 #include "util/u_logging.h"
 #include "version.h"
 
+#include <algorithm>
 #include <chrono>
 #include <cmath>
 #include <ctime>
@@ -355,6 +356,17 @@ health::sample health_monitor::collect(int64_t now_unix_s)
 				s.headset.thermal_status = t.thermal_status;
 			if (t.display_hz_active_x10)
 				s.headset.display_hz = float(t.display_hz_active_x10) / 10.f;
+			// Runtime counters (GRID #3095 M6c): 0xFFFF / 255 on the wire is unknown.
+			auto count = [](uint16_t v) { return v == 0xFFFF ? -1 : int32_t(v); };
+			auto ms = [](uint16_t v) { return v == 0xFFFF ? -1.f : float(v) / 10.f; };
+			auto pct = [](uint8_t v) { return v == 255 ? -1 : int32_t(v); };
+			s.headset.compositor_dropped = count(t.compositor_dropped);
+			s.headset.compositor_stale = count(t.compositor_stale);
+			s.headset.compositor_gpu_ms = ms(t.compositor_gpu_ms_x10);
+			s.headset.app_gpu_ms = ms(t.app_gpu_ms_x10);
+			s.headset.runtime_m2p_ms = ms(t.runtime_m2p_ms_x10);
+			s.headset.cpu_util_pct = pct(t.cpu_util_pct);
+			s.headset.gpu_util_pct = pct(t.gpu_util_pct);
 			telemetry_fresh = false;
 		}
 		fb.encode.clear();
@@ -370,6 +382,15 @@ health::sample health_monitor::collect(int64_t now_unix_s)
 		s.app_metrics_dropped = connector_dropped;
 		connector_dropped = 0;
 		s.app_warnings = app_warnings.active();
+	}
+
+	// Judder (GRID #3095 M6c): the rows that settled this second, classified by stage. The
+	// cursor follows the writer's rule so a warning names the same frames the record shows.
+	{
+		std::vector<health::frame_row> rows;
+		health::settled_rows(health::frames(), judder_next_n, video_streams, os_monotonic_get_ns(), [&rows](const health::frame_row & row) { rows.push_back(row); });
+		std::ranges::sort(rows, {}, [](const health::frame_row & r) { return std::pair(r.n, r.s); });
+		s.frames = judder.step(rows, fb.period_ns.load(std::memory_order_relaxed));
 	}
 
 	if (fill)
