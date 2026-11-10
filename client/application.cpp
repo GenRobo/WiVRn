@@ -1330,6 +1330,11 @@ void application::initialize()
 	for (const auto & i: interaction_profiles)
 		opt_extensions.insert(opt_extensions.end(), i.required_extensions.begin(), i.required_extensions.end());
 
+#ifdef __ANDROID__
+	// GRID #3095: lets the runtime raise the frame-loop and worker threads' scheduling class.
+	opt_extensions.push_back(XR_KHR_ANDROID_THREAD_SETTINGS_EXTENSION_NAME);
+#endif
+
 	// GRID #3095 M6c keys the headset's compositor counters on this extension; say once whether
 	// the runtime has it (the full list is logged by xr::instance).
 	bool performance_metrics = false;
@@ -1755,8 +1760,13 @@ void application::loop()
 #ifdef __ANDROID__
 void application::run()
 {
+	// This is android_main (the native_app_glue thread, named in main.cpp): it owns the activity
+	// event loop below while application_thread owns the OpenXR frame loop.
+	xr_session.set_android_thread_type(XR_ANDROID_THREAD_TYPE_APPLICATION_MAIN_KHR);
+
 	auto application_thread = utils::named_thread("application_thread", [&]() {
 		setup_jni();
+		xr_session.set_android_thread_type(XR_ANDROID_THREAD_TYPE_RENDERER_MAIN_KHR);
 
 		while (!is_exit_requested())
 		{

@@ -19,17 +19,38 @@
 
 #pragma once
 
+#include <functional>
 #include <pthread.h>
+#include <string>
+#include <string_view>
 #include <thread>
+#include <type_traits>
 #include <utility>
 
 namespace utils
 {
-template <typename... Args>
-std::thread named_thread(const std::string & name, Args &&... args)
+/// The kernel keeps TASK_COMM_LEN - 1 = 15 bytes of a thread name; pthread_setname_np rejects
+/// longer names (ERANGE) instead of truncating them, so cut here.
+constexpr size_t thread_name_max = 15;
+
+inline std::string thread_name(std::string_view name)
 {
-	std::thread t{std::forward<Args>(args)...};
-	pthread_setname_np(t.native_handle(), name.substr(0, 15).c_str());
-	return t;
+	return std::string(name.substr(0, thread_name_max));
+}
+
+/// std::thread whose comm is `name` (cut to 15 bytes) before `f` runs. The thread names itself
+/// so the name is set before anything in `f` reads it: jni_thread::setup_thread hands it to ART,
+/// which would otherwise rename a JNI-attached thread "Thread-N" (GRID #3095).
+template <typename F, typename... Args>
+std::thread named_thread(std::string_view name, F && f, Args &&... args)
+{
+	return std::thread(
+	        [](std::string name, std::decay_t<F> f, std::decay_t<Args>... args) {
+		        pthread_setname_np(pthread_self(), name.c_str());
+		        std::invoke(std::move(f), std::move(args)...);
+	        },
+	        thread_name(name),
+	        std::forward<F>(f),
+	        std::forward<Args>(args)...);
 }
 } // namespace utils
