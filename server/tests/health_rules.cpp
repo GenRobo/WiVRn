@@ -13,6 +13,7 @@
 #include <cstdlib>
 #include <fstream>
 #include <iostream>
+#include <map>
 #include <set>
 #include <string>
 #include <vector>
@@ -23,14 +24,14 @@ namespace
 {
 int failures = 0;
 
-#define CHECK(cond)                                                                   \
-	do                                                                                \
-	{                                                                                 \
-		if (!(cond))                                                                  \
-		{                                                                             \
+#define CHECK(cond)                                                                               \
+	do                                                                                        \
+	{                                                                                         \
+		if (!(cond))                                                                      \
+		{                                                                                 \
 			std::cerr << __FILE__ << ":" << __LINE__ << ": FAIL " #cond << std::endl; \
 			++failures;                                                               \
-		}                                                                             \
+		}                                                                                 \
 	} while (0)
 
 std::vector<sample> load(const std::string & path)
@@ -250,8 +251,172 @@ void test_json_round_trip()
 		CHECK(std::abs(back->app.hz - 120) < 1e-3);
 		CHECK(back->headset.charging);
 		CHECK(back->app_metrics.at("sim_realtime_ratio") == 0.6);
+		CHECK(back->app_metrics_dropped == 0);
+		CHECK(back->app_warnings.empty());
 	}
 	CHECK(!from_json_line("not json"));
+
+	s.app_metrics_dropped = 3;
+	s.app_warnings = {"sim_slow"};
+	back = from_json_line(to_json_line(s, {}));
+	CHECK(back and back->app_metrics_dropped == 3);
+	CHECK(back and back->app_warnings == std::vector<std::string>{"sim_slow"});
+	CHECK(to_json_line(clean_at(0), {}).find("app_") == std::string::npos); // nothing posted: keys absent
+}
+
+// --- telemetry connector (milestone 4): inbound lines are validated, counted and never crash ---
+
+void test_connector_parse()
+{
+	auto w = parse_connector_line(R"({"type":"warning","id":"sim_slow","message":"Simulation at 0.6x realtime","ttl_s":10})");
+	CHECK(w and w->kind == connector_line::kind::warning);
+	CHECK(w and w->name == "sim_slow");
+	CHECK(w and w->message == "Simulation at 0.6x realtime");
+	CHECK(w and w->ttl_s == 10);
+	// ttl is optional (10 s) and clamped to 1..600
+	w = parse_connector_line(R"({"type":"warning","id":"a","message":"m"})");
+	CHECK(w and w->ttl_s == 10);
+	w = parse_connector_line(R"({"type":"warning","id":"a","message":"m","ttl_s":5000})");
+	CHECK(w and w->ttl_s == 600);
+
+	auto m = parse_connector_line(R"({"type":"metric","name":"sim_realtime_ratio","value":0.6,"unit":"x"})");
+	CHECK(m and m->kind == connector_line::kind::metric);
+	CHECK(m and m->name == "sim_realtime_ratio");
+	CHECK(m and m->value == 0.6);
+	CHECK(parse_connector_line(R"({"type":"metric","name":"n","value":42})").has_value()); // integers are numbers
+
+	// Dropped: oversize, not JSON, not an object, unknown type, bad id/name, bad value, bad message
+	std::string oversize = R"({"type":"metric","name":"n","value":1,"pad":")" + std::string(max_connector_line, 'x') + "\"}";
+	CHECK(!parse_connector_line(oversize));
+	CHECK(!parse_connector_line(""));
+	CHECK(!parse_connector_line("not json"));
+	CHECK(!parse_connector_line("[1,2,3]"));
+	CHECK(!parse_connector_line(R"("metric")"));
+	CHECK(!parse_connector_line(R"({"type":"frame","name":"n","value":1})"));
+	CHECK(!parse_connector_line(R"({"name":"n","value":1})"));
+	CHECK(!parse_connector_line(R"({"type":"metric","name":"Bad-Name","value":1})"));
+	CHECK(!parse_connector_line(R"({"type":"metric","name":"","value":1})"));
+	CHECK(!parse_connector_line(R"({"type":"metric","name":")" + std::string(33, 'a') + R"(","value":1})"));
+	CHECK(parse_connector_line(R"({"type":"metric","name":")" + std::string(32, 'a') + R"(","value":1})").has_value());
+	CHECK(!parse_connector_line(R"({"type":"metric","name":"n"})"));
+	CHECK(!parse_connector_line(R"({"type":"metric","name":"n","value":"1"})"));
+	CHECK(!parse_connector_line(R"({"type":"metric","name":7,"value":1})"));
+	CHECK(!parse_connector_line(R"({"type":"warning","id":"sim slow","message":"m"})"));
+	CHECK(!parse_connector_line(R"({"type":"warning","id":"a","message":""})"));
+	CHECK(!parse_connector_line(R"({"type":"warning","id":"a","message":")" + std::string(201, 'm') + R"("})"));
+	CHECK(parse_connector_line(R"({"type":"warning","id":"a","message":")" + std::string(200, 'm') + R"("})").has_value());
+	CHECK(!parse_connector_line(R"({"type":"warning","id":"a","message":"m","ttl_s":"10"})"));
+	CHECK(!parse_connector_line(R"({"type":"warning","id":"a"})"));
+}
+
+void test_connector_line_buffer()
+{
+	connector_line_buffer buf;
+	std::vector<std::string> lines;
+	auto collect = [&](std::string_view l) { lines.emplace_back(l); };
+
+	// Lines split across arbitrary chunks, CRLF tolerated by the parser, empty lines delivered as-is
+	buf.feed("{\"a\":1}\n{\"b\"", collect);
+	CHECK(lines.size() == 1);
+	buf.feed(":2}\r\n\n{\"c\":3}", collect);
+	CHECK(lines.size() == 3);
+	CHECK(lines[0] == "{\"a\":1}");
+	CHECK(lines[1] == "{\"b\":2}\r");
+	CHECK(lines[2].empty());
+	buf.feed("\n", collect);
+	CHECK(lines.size() == 4 and lines[3] == "{\"c\":3}");
+
+	// An oversize line is delivered once, truncated to max + 1 so the parser rejects it, and the
+	// rest of it is skipped; the following line is intact.
+	lines.clear();
+	std::string huge(3 * max_connector_line, 'x');
+	buf.feed(huge.substr(0, 1000), collect);
+	buf.feed(huge.substr(1000, 5000), collect);
+	CHECK(lines.size() == 1 and lines[0].size() == max_connector_line + 1);
+	buf.feed(huge.substr(6000) + "\n{\"ok\":true}\n", collect);
+	CHECK(lines.size() == 2 and lines[1] == "{\"ok\":true}");
+	CHECK(!parse_connector_line(lines[0]));
+	CHECK(buf.pending.empty() and not buf.skipping);
+
+	// Exactly the limit passes
+	lines.clear();
+	buf.feed(std::string(max_connector_line, 'y') + "\n", collect);
+	CHECK(lines.size() == 1 and lines[0].size() == max_connector_line);
+}
+
+void test_app_warning_cooldown()
+{
+	app_warning_state st;
+	CHECK(st.fire("sim_slow", 10, 1000));
+	CHECK(!st.fire("sim_slow", 10, 1005)); // within ttl: not sent again
+	CHECK(!st.fire("sim_slow", 10, 1020)); // ttl over, but within the 30 s rule cooldown
+	CHECK(st.fire("other", 10, 1020));     // another id is independent
+	CHECK((st.active() == std::vector<std::string>{"other", "sim_slow"}));
+	CHECK(st.expire(1009).empty());
+	CHECK(st.expire(1010) == std::vector<std::string>{"sim_slow"});
+	CHECK(st.active() == std::vector<std::string>{"other"});
+	CHECK(st.fire("sim_slow", 10, 1030)); // cooldown elapsed
+	CHECK(st.fire("long", 120, 1030));
+	CHECK(!st.fire("long", 120, 1100)); // a ttl longer than the cooldown holds the id for the ttl
+	CHECK(st.fire("long", 120, 1150));
+
+	// Distinct ids are bounded
+	app_warning_state many;
+	for (size_t i = 0; i < app_warning_state::max_entries; ++i)
+		CHECK(many.fire("id_" + std::to_string(i), 10, 0));
+	CHECK(!many.fire("one_too_many", 10, 0));
+	many.expire(100); // every entry listed and refire-able: forgotten
+	CHECK(many.active().empty());
+	CHECK(many.fire("one_too_many", 10, 100));
+}
+
+/// What the relay thread does with the sink's bytes: split, parse, drop and count.
+void test_connector_end_to_end()
+{
+	connector_line_buffer buf;
+	std::map<std::string, double> metrics;
+	std::vector<std::string> sent;
+	uint32_t dropped = 0;
+	app_warning_state st;
+	auto on_line = [&](std::string_view line) {
+		auto p = parse_connector_line(line);
+		if (not p)
+			dropped++;
+		else if (p->kind == connector_line::kind::metric)
+			metrics[p->name] = p->value;
+		else if (st.fire(p->name, p->ttl_s, 0))
+			sent.push_back(p->message);
+	};
+	std::string stream =
+	        R"({"type":"metric","name":"sim_realtime_ratio","value":0.6})"
+	        "\n"
+	        R"({"type":"warning","id":"sim_slow","message":"Simulation slow","ttl_s":10})"
+	        "\n"
+	        R"({"type":"warning","id":"sim_slow","message":"Simulation slow","ttl_s":10})"
+	        "\n"
+	        "garbage\n"
+	        "[]\n"
+	        R"({"type":"frame","t":1})"
+	        "\n"
+	        R"({"type":"metric","name":"Bad","value":1})"
+	        "\n" +
+	        std::string(max_connector_line + 1, 'z') + "\n" +
+	        R"({"type":"metric","name":"sim_realtime_ratio","value":0.7})"
+	        "\n";
+	for (size_t i = 0; i < stream.size(); i += 7)
+		buf.feed(std::string_view(stream).substr(i, 7), on_line);
+	CHECK(sent == std::vector<std::string>{"Simulation slow"});
+	CHECK(metrics.size() == 1 and metrics.at("sim_realtime_ratio") == 0.7); // last value wins
+	CHECK(dropped == 5);
+
+	sample s;
+	s.app_metrics = metrics;
+	s.app_metrics_dropped = dropped;
+	s.app_warnings = st.active();
+	auto line = to_json_line(s, {});
+	CHECK(line.find(R"("app_metrics":{"sim_realtime_ratio":0.7})") != std::string::npos);
+	CHECK(line.find(R"("app_metrics_dropped":5)") != std::string::npos);
+	CHECK(line.find(R"("app_warnings":["sim_slow"])") != std::string::npos);
 }
 } // namespace
 
@@ -268,6 +433,10 @@ int main(int argc, char ** argv)
 	test_thresholds();
 	test_histogram();
 	test_json_round_trip();
+	test_connector_parse();
+	test_connector_line_buffer();
+	test_app_warning_cooldown();
+	test_connector_end_to_end();
 	if (failures)
 	{
 		std::cerr << failures << " check(s) failed" << std::endl;

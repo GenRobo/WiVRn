@@ -85,8 +85,13 @@ struct sample
 
 	float motion_to_photon_ms_p95 = -1;
 
-	/// Metrics posted by applications on the telemetry connector (milestone 4).
+	/// Metrics posted by applications on the telemetry connector (milestone 4): the last value
+	/// posted for each name during this second.
 	std::map<std::string, double> app_metrics;
+	/// Connector lines dropped this second: oversize, not JSON, unknown type, bad id or value.
+	uint32_t app_metrics_dropped = 0;
+	/// Application warnings (connector) still within their ttl.
+	std::vector<std::string> app_warnings;
 };
 
 enum class rule_id : uint8_t
@@ -166,5 +171,97 @@ private:
 std::string to_json_line(const sample &, std::span<const rule_id> active);
 /// Parse a line written by to_json_line (used by tests and the connector).
 std::optional<sample> from_json_line(std::string_view);
+
+// --- telemetry connector (milestone 4) ---------------------------------------------------
+
+/// Longest inbound connector line accepted, in bytes, newline excluded.
+constexpr size_t max_connector_line = 4096;
+
+/// A validated line posted by an application on the connector.
+struct connector_line
+{
+	enum class kind
+	{
+		metric,
+		warning,
+	} kind;
+	std::string name;    // metric name or warning id, [a-z0-9_]{1,32}
+	double value = 0;    // metric
+	std::string message; // warning, 1..200 characters
+	int ttl_s = 10;      // warning, 1..600
+};
+
+/// Parse and validate one inbound line; nullopt for anything that must be dropped.
+std::optional<connector_line> parse_connector_line(std::string_view);
+
+/// Splits a byte stream into lines for parse_connector_line. A line longer than
+/// max_connector_line is delivered truncated to max_connector_line + 1 bytes (so the
+/// receiver can count it as oversize) and the rest of it is skipped.
+struct connector_line_buffer
+{
+	std::string pending;
+	bool skipping = false;
+
+	template <typename F>
+	void feed(std::string_view data, F && on_line)
+	{
+		while (not data.empty())
+		{
+			size_t nl = data.find('\n');
+			std::string_view chunk = data.substr(0, nl);
+			data.remove_prefix(nl == std::string_view::npos ? data.size() : nl + 1);
+			if (skipping)
+			{
+				skipping = nl == std::string_view::npos;
+				continue;
+			}
+			if (pending.size() + chunk.size() > max_connector_line)
+			{
+				pending.append(chunk.substr(0, max_connector_line + 1 - pending.size()));
+				skipping = nl == std::string_view::npos;
+				on_line(std::string_view(pending));
+				pending.clear();
+				continue;
+			}
+			if (nl == std::string_view::npos)
+			{
+				pending.append(chunk);
+				return;
+			}
+			if (pending.empty())
+				on_line(chunk);
+			else
+			{
+				pending.append(chunk);
+				on_line(std::string_view(pending));
+				pending.clear();
+			}
+		}
+	}
+};
+
+/// Application warnings follow the rules' cooldown: an id posted again within
+/// max(ttl_s, cooldown_s) of its last firing is not sent again; it stays listed in the sample
+/// until its ttl elapses. At most max_entries distinct ids are tracked at once; more are dropped.
+struct app_warning_state
+{
+	int cooldown_s = 30;
+	static constexpr size_t max_entries = 256;
+
+	/// True when the warning should be sent to the headset now.
+	bool fire(const std::string & id, int ttl_s, int64_t t);
+	/// Ids whose ttl elapsed at `t`, removed from the active list.
+	std::vector<std::string> expire(int64_t t);
+	std::vector<std::string> active() const;
+
+private:
+	struct entry
+	{
+		int64_t until_t;  // listed until
+		int64_t refire_t; // may fire again from
+		bool listed;
+	};
+	std::map<std::string, entry> entries;
+};
 
 } // namespace wivrn::health

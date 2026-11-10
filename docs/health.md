@@ -41,7 +41,7 @@ still shows those as before.
 | --- | --- | --- |
 | `warnings` | `true` | Send a toast to the headset when a rule fires, and *Stream recovered* when all clear |
 | `log` | `true` | Write the flight record (below) |
-| `app-data` | `true` | Publish samples and warnings on the `wivrn-health` app-data channel (milestone 4) |
+| `app-data` | `true` | Speak the [connector](#connector) protocol on the `wivrn-health` app-data channel, when one is configured |
 | `log-dir` | `%LOCALAPPDATA%\wivrn\logs` on Windows, `$XDG_STATE_HOME/wivrn` or `~/.local/state/wivrn` elsewhere | Where the record goes |
 | `thresholds` | see below | `"<rule>.<param>": number` overrides; unknown keys are ignored |
 
@@ -88,7 +88,11 @@ a competing browser dropped the application from 120 Hz to 66–82 Hz.
   width 25 %), reset every second. `-1` means unknown.
 - `encoder.presented` counts all three streams (two eyes and the alpha stream).
 - `link.idr_unsent_gap` is reserved: it needs encoder frame-id tracking and is 0 for now.
-- `app_metrics` appears when an application posted metrics on the connector (milestone 4).
+- `app_metrics` appears when an application posted metrics on the [connector](#connector)
+  during that second, `app_metrics_dropped` when it posted lines the server rejected, and
+  `app_warnings` lists the application warnings still within their ttl.
+- Event lines (`"type":"event"`, `"type":"warning"`) are interleaved with the samples in the
+  connector stream (below); the file holds them too, so a reader must look at `type`.
 
 When a rule fires, `wivrn-health-event-<time>.json` is written with the sample and the last
 600 per-frame timelines per stream (`columns` names the fields; timestamps are the headset's
@@ -100,6 +104,71 @@ Reading a record with Python:
 import json, statistics
 rows = [json.loads(l) for l in open("wivrn-health-20261030-154559.jsonl")]
 print(statistics.median(r["motion_to_photon_ms_p95"] for r in rows))
+```
+
+## Connector
+
+An external process (the GRID link monitor, a simulation backend) reads the stream health and
+posts its own warnings and metrics over the `wivrn-health` [app-data](configuration.md#app-data)
+channel. Configure a sink and keep `health.app-data` on:
+
+```json
+{ "app-data": [{ "channel": "wivrn-health", "connect": "127.0.0.1:9761" }] }
+```
+
+The server connects to the sink as a TCP client while a headset session is active (retrying
+every 2 s) and both sides write UTF-8 JSON lines, one object per line, `\n`-terminated. Unlike
+other channels, nothing on `wivrn-health` reaches the headset app: the server itself is the
+peer. The sink must tolerate reconnects and reset its line buffer when the connection drops.
+
+### Server to sink
+
+Each line has a `type`:
+
+| `type` | When | Content |
+| --- | --- | --- |
+| `sample` | once per second | the [flight record](#flight-record) object, plus `"session":"paused"` while the headset is away |
+| `warning` | a rule or an application warning changes state | `t`, `id` (rule name or application id), `state` (`fired`/`cleared`), `message` (when fired), `source: "app"` for application warnings |
+| `event` | session lifecycle | `t`, `event` (`session_paused`, `session_resumed`) |
+| `frame` | reserved | per-frame timelines, GRID#3095 milestone 6a; not sent yet, readers must skip unknown types |
+
+```json
+{"t":1761866000,"type":"sample","link":{...},"headset":{...},"encoder":{...},"app":{...},"motion_to_photon_ms_p95":26.5,"warnings":["link_loss"],"app_metrics":{"sim_realtime_ratio":0.6}}
+{"t":1761866003,"type":"warning","id":"link_loss","state":"fired","message":"Video frames lost between PC and headset (8/s). ..."}
+{"t":1761866010,"type":"warning","id":"sim_slow","state":"fired","message":"Simulation at 0.6x realtime","source":"app"}
+{"t":1761866020,"type":"warning","id":"sim_slow","state":"cleared","source":"app"}
+```
+
+### Sink to server
+
+| `type` | Fields | Effect |
+| --- | --- | --- |
+| `warning` | `id` `[a-z0-9_]{1,32}`, `message` 1–200 characters, `ttl_s` number 1–600 (default 10) | Shown in the headset like a rule warning (`server_message::kind::warning`, amber view-locked panel) and written as a `warning` line with `"source":"app"`. The id is listed in `app_warnings` for `ttl_s` seconds and, like the rules, cannot fire again within 30 s of its last firing (or within its ttl if longer); posts in that window are silently merged. At most 256 distinct ids are tracked at once. |
+| `metric` | `name` `[a-z0-9_]{1,32}`, `value` finite number; other keys ignored | Merged into the next `sample` under `app_metrics`; the last value posted for a name during the second wins. Metrics are not evaluated by any rule. |
+
+```json
+{"type":"warning","id":"sim_slow","message":"Simulation at 0.6x realtime","ttl_s":10}
+{"type":"metric","name":"sim_realtime_ratio","value":0.6}
+```
+
+Validation: a line is at most 4096 bytes without the newline, a JSON object, with a known
+`type` and the fields above. Anything else (a longer line, which is skipped up to its newline;
+a non-object; an unknown type such as `frame`; a bad id, value or message) is dropped and
+counted in the next sample's `app_metrics_dropped`; it never disconnects the sink or affects
+the stream. The server does not answer individual lines. With `health.warnings` off, posted
+warnings are recorded but not shown in the headset.
+
+Posting from Python:
+
+```python
+import json, socket
+srv = socket.create_server(("127.0.0.1", 9761))
+conn, _ = srv.accept()  # the WiVRn server connects when a headset session starts
+conn.sendall((json.dumps({"type": "metric", "name": "sim_realtime_ratio", "value": 0.6}) + "\n").encode())
+for line in conn.makefile():
+    row = json.loads(line)
+    if row["type"] == "sample":
+        print(row["motion_to_photon_ms_p95"], row.get("app_metrics"))
 ```
 
 ## Testing

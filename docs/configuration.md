@@ -113,6 +113,8 @@ While a headset session is active, the server connects to each sink as a TCP cli
 
 Headset-to-sink data uses a bounded 16 MiB queue rather than blocking the tracking/network thread. Overflow closes the local TCP connection and discards pending data before reconnecting: missing chunks are never followed by later chunks on the same connection, which would corrupt application framing. Sink writes are non-blocking and stop-aware, so a stalled receiver cannot prevent session shutdown. Consumers must reset their framing state on reconnect.
 
+The channel `wivrn-health` is spoken by the server itself, not the headset app: the sink receives the stream health samples and warnings, and what it writes goes to the health monitor. See [health.md](health.md#connector).
+
 ### Example
 ```json
 {

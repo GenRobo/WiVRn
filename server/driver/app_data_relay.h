@@ -24,9 +24,11 @@
 #include <atomic>
 #include <cstdint>
 #include <deque>
+#include <functional>
 #include <mutex>
 #include <stop_token>
 #include <string>
+#include <string_view>
 #include <thread>
 #include <vector>
 
@@ -38,6 +40,10 @@ class wivrn_session;
 // configuration). While resumed, a thread connects to the sink, retrying every 2 s, forwards what
 // the sink writes to the headset as to_headset::app_data and what the headset sends to the sink.
 // Without a connected sink, headset data is dropped and counted.
+//
+// A channel the server itself speaks (the stream health connector, GRID #2834 M4) sets on_sink_data:
+// bytes from the sink then go to that handler on the relay thread instead of the headset, and the
+// server queues its own lines with from_server().
 class app_data_relay
 {
 	wivrn_session & session;
@@ -66,6 +72,7 @@ class app_data_relay
 	TCP connect(std::stop_token stop);
 	void serve(std::stop_token stop, TCP & tcp);
 	bool flush_queue(std::stop_token stop, TCP & tcp);
+	void enqueue(std::vector<uint8_t> && data);
 	void drop_queue();
 	void log_counters();
 
@@ -87,5 +94,10 @@ public:
 
 	// Called by the session's network thread with data from the headset
 	void from_headset(std::vector<uint8_t> && data);
+	// Called by any server thread with data for the sink; dropped while no sink is connected
+	void from_server(std::string_view data);
+
+	// Set before resume(). Receives what the sink writes, on the relay thread.
+	std::function<void(std::string_view)> on_sink_data;
 };
 } // namespace wivrn
