@@ -138,11 +138,14 @@ std::string frame_header_line(const frame_header & h)
 
 std::string frame_clock_line(int64_t t_ns, int64_t t0, int64_t off_ns, int64_t jitter_ns)
 {
+	// `off_ns` is the raw headset − server monotonic offset, hundreds of seconds when the two
+	// booted at different times; the reader wants its drift, so the whole value is kept.
+	bool known = off_ns != frame_row::no_offset;
 	return nlohmann::json{
 	        {"type", "clock"},
 	        {"t", (t_ns - t0) / 1000},
-	        {"off_us", double(off_ns) / 1000.0},
-	        {"jitter_us", double(jitter_ns) / 1000.0},
+	        {"off_us", known ? nlohmann::json(double(off_ns) / 1000.0) : nlohmann::json(nullptr)},
+	        {"jitter_us", known ? nlohmann::json(double(jitter_ns) / 1000.0) : nlohmann::json(nullptr)},
 	}
 	        .dump();
 }

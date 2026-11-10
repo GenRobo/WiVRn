@@ -106,8 +106,8 @@ private:
 		uint32_t repeated = 0;
 		std::atomic<int64_t> period_ns{0};
 		std::array<int64_t, 3> last_displayed{};
-		// Clock offset seen by on_feedback this second: last, lowest, highest.
-		int64_t off_ns = 0, off_min_ns = INT64_MAX, off_max_ns = INT64_MIN;
+		// Clock offset seen by on_feedback this second: last (no_offset before the first), lowest, highest.
+		int64_t off_ns = health::frame_row::no_offset, off_min_ns = INT64_MAX, off_max_ns = INT64_MIN;
 	};
 	mutable std::mutex mutex;
 	feedback_state fb;

@@ -190,6 +190,18 @@ void test_header_clock_event()
 	CHECK(c["t"] == 5'000'000);
 	CHECK(c["off_us"] == 1170.5);
 	CHECK(c["jitter_us"] == 42.0);
+	// The column is clock_offset::b (headset − server monotonic) in microseconds, the whole
+	// value: a headset that booted 824 s before the PC reads 824 394 750.743, and two clock lines
+	// a second apart differ by the estimate's drift only (32 µs/s on the 2026-11-10 laptop run).
+	int64_t b = 824'394'750'743;
+	auto c1 = nlohmann::json::parse(frame_clock_line(t0 + 44'000'000'000, t0, b, 33'000));
+	auto c2 = nlohmann::json::parse(frame_clock_line(t0 + 45'000'000'000, t0, b + 32'220, 33'000));
+	CHECK(std::abs(c1["off_us"].get<double>() - 824394750.743) < 1e-6);
+	CHECK(std::abs(c2["off_us"].get<double>() - c1["off_us"].get<double>() - 32.22) < 1e-6);
+	CHECK(c2["t"].get<int64_t>() - c1["t"].get<int64_t>() == 1'000'000);
+	// Before the first feedback the offset is unknown: null, not 0.
+	auto c0 = nlohmann::json::parse(frame_clock_line(t0 + 1'000'000'000, t0, frame_row::no_offset, 0));
+	CHECK(c0["off_us"].is_null() and c0["jitter_us"].is_null());
 
 	auto e = nlohmann::json::parse(frame_event_line(t0 + 1'500'000, t0, "session_state", "FOCUSED"));
 	CHECK(e["type"] == "event");

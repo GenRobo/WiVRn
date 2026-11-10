@@ -74,6 +74,8 @@ struct frame_header
 /// The JSON lines of the record; every time becomes whole microseconds since t0, unknown is null.
 std::string frame_line(const frame_row &, int64_t t0_mono_ns);
 std::string frame_header_line(const frame_header &);
+/// `off_ns` is the current headset − server offset (frame_row::no_offset before the first
+/// feedback: both fields null), `jitter_ns` its max − min over the second.
 std::string frame_clock_line(int64_t t_ns, int64_t t0_mono_ns, int64_t off_ns, int64_t jitter_ns);
 /// `value` is any JSON value (string, number, bool) or null when the event carries none.
 std::string frame_event_line(int64_t t_ns, int64_t t0_mono_ns, std::string_view name, const nlohmann::json & value);

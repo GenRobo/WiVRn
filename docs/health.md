@@ -163,10 +163,13 @@ that, whichever comes first; a row is never written twice, feedback arriving aft
   `pose_flags`: the `XrViewStateFlags` of that pose (bit 0 orientation valid, bit 1 position
   valid, bit 2 orientation tracked, bit 3 position tracked; 0 = no pose). `null` when the
   application did not locate its views for this frame's display time.
-- `off_us`: the clock-offset estimate (headset time minus server time) in microseconds when
-  the feedback arrived.
+- `off_us`: the clock-offset estimate (headset monotonic time minus server monotonic time) in
+  microseconds when the feedback arrived. It is the whole offset, hundreds of seconds when the
+  two booted at different times (824 394 750.7 on the 2026-11-10 laptop run); what matters is
+  its change over the file, the drift between the two clocks (32 µs/s there).
 
-Once per second a `clock` line records the offset and its spread over the second, and session
+Once per second a `clock` line records the same offset (`off_us`, `null` before the first
+feedback) and `jitter_us`, the spread (max − min) of the estimate over that second; session
 events are `event` lines; `value` is a string, a number, a boolean or `null`:
 
 ```json
