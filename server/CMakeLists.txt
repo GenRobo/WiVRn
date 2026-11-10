@@ -119,6 +119,7 @@ if (WIVRN_BUILD_SERVER)
 			driver/clock_offset.cpp
 			driver/configuration.cpp
 			driver/hand_joints_list.cpp
+			driver/health_frames.cpp
 			driver/health_monitor.cpp
 			driver/health_rules.cpp
 			driver/pose_list.cpp
@@ -322,11 +323,21 @@ if (WIVRN_BUILD_SERVER)
 		target_include_directories(wivrn-health-test PRIVATE .)
 		target_link_libraries(wivrn-health-test PRIVATE nlohmann_json::nlohmann_json)
 		add_test(NAME health_rules COMMAND wivrn-health-test ${CMAKE_CURRENT_SOURCE_DIR}/tests/health_fixtures)
+		# Frame record (GRID #3095): ring to JSONL, rotation, the settle timeout, nothing when off.
+		add_executable(wivrn-health-frames-test
+			tests/health_frames.cpp
+			driver/health_frames.cpp
+		)
+		target_compile_features(wivrn-health-frames-test PRIVATE cxx_std_20)
+		target_include_directories(wivrn-health-frames-test PRIVATE .)
+		target_link_libraries(wivrn-health-frames-test PRIVATE nlohmann_json::nlohmann_json)
+		add_test(NAME health_frames COMMAND wivrn-health-frames-test)
 		# Application pacer (GRID #2834): the half-rate lock-in and its probe, over a fake clock.
 		add_executable(wivrn-app-pacer-test
 			tests/app_pacer.cpp
 			driver/app_pacer.cpp
 			driver/configuration.cpp
+			driver/health_frames.cpp
 			hostname.cpp
 		)
 		target_compile_features(wivrn-app-pacer-test PRIVATE cxx_std_20)
