@@ -199,7 +199,9 @@ class CameraStream(
         }
         calibration = if (id != null && characteristics != null) calibrationOf(id, characteristics) else null
         if (captureImages) {
-            val captureThread = HandlerThread("sensor-camera").apply { start() }
+            // Below the frame loop like the detector (GRID #3095): the copies into the encoder
+            // and the detector's luma must never delay a display frame.
+            val captureThread = HandlerThread("sensor-camera", Process.THREAD_PRIORITY_BACKGROUND).apply { start() }
             cameraThread = captureThread
             handler = Handler(captureThread.looper)
             if (h264) {
