@@ -357,6 +357,28 @@ for camera modes or real network status for depth-only, without an echo loop.
 Sensor messages are serialized before transport
 chunking, so concurrent images, markers, status and depth cannot interleave bytes.
 
+The marker detector is bounded so it cannot starve frame submission (GRID #3095):
+it runs on one background-priority thread with OpenCV's worker pool disabled, so
+its cost is at most one core and proportional to the frames it is given. Frames
+are dropped on the camera thread, before any copy, down to CONFIGURE's detection
+rate; while no marker has been seen for a second the client caps that at 15 Hz
+regardless of the commanded rate (the PC asks for its full rate until every
+target is anchored, and 15 Hz is enough to notice a marker appear). The PC can
+still ask for less. Candidates can be searched on a copy of the frame scaled by
+`marker_detect_scale` (client configuration, default `1.0`, clamped to 0.25..1;
+frames up to 640 px wide are always searched as is), after which each marker's
+corners are refined to subpixel precision on the full 1280×960 frame with
+OpenCV's own ArUco refinement window, so a scale costs candidate recall but not
+corner precision. Half scale is opt-in because it lost recall at the operator's
+distance: 70 mm markers at about 1 m are ~50 px a side on the 1280×960 camera,
+~25 px at half scale, below the detector's recall floor (one of six markers found,
+so the sheet never anchored). Once a minute the client logs
+`VivariumMarkers: 14.8 Hz, 11.2 ms/frame, 1 thread, 6 markers max`: the measured
+report rate, the detector thread's CPU time per frame, how many threads carry the
+`marker-detector` name (OpenCV workers inherit it; more than one means the pool
+is back), and the most markers one frame held over the minute, so a scale that
+loses recall shows up next to the CPU it saves.
+
 Depth is opt-in through both the local switch and CONFIGURE's optional `>BH`
 depth flag/rate tail. The client requests Spatial Data permission only when
 depth is requested and requires `XR_META_environment_depth`; unsupported

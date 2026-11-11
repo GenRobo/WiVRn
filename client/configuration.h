@@ -127,6 +127,10 @@ public:
 	bool marker_tracking = false;
 	bool rgb_camera_streaming = false;
 	bool depth_camera_streaming = false;
+	// Marker detection searches a copy of the camera frame scaled by this (0.25 to 1;
+	// frames up to 640 px wide are searched as is), then refines corners on the full frame.
+	// 1 by default: half scale lost 70 mm markers at ~1 m (~25 px a side) on the Quest 3.
+	float marker_detect_scale = 1;
 
 	// RGB camera stream: "h264" (hardware encoder, the default) or "jpeg"; the streamed
 	// image size, used when the camera offers it (else the 1280x960 capture is sent);

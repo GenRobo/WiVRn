@@ -174,6 +174,8 @@ decoder::decoder(
 	worker = utils::named_thread(
 	        "decoder-" + std::to_string(stream_index),
 	        [this]() {
+		        // Feeds MediaCodec, whose output lands in the swapchain (GRID #3095).
+		        application::set_xr_thread_type(XR_ANDROID_THREAD_TYPE_APPLICATION_WORKER_KHR);
 		        while (true)
 		        {
 			        try

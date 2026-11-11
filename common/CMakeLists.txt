@@ -65,6 +65,15 @@ if (WIVRN_BUILD_TEST AND (WIVRN_BUILD_SERVER OR WIVRN_BUILD_CLIENT))
     target_compile_definitions(wivrn-packets-test PRIVATE WIVRN_PROTOCOL_VERSION_BEFORE_HEALTH=0x753bc12b975ba542ull WIVRN_PROTOCOL_VERSION_BEFORE_COUNTERS=0x9fa3af4fade60ed5ull WIVRN_HEALTH_PACKETS=1)
     add_test(NAME health_packets COMMAND wivrn-packets-test)
     set_tests_properties(health_packets PROPERTIES SKIP_RETURN_CODE 77)
+
+    # utils::named_thread (GRID #3095) is pthread-only, like its sole user, the client.
+    if (NOT WIN32)
+        find_package(Threads REQUIRED)
+        add_executable(wivrn-thread-name-test tests/thread_name.cpp)
+        target_include_directories(wivrn-thread-name-test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+        target_link_libraries(wivrn-thread-name-test Threads::Threads)
+        add_test(NAME thread_name COMMAND wivrn-thread-name-test)
+    endif()
 endif()
 
 if(ANDROID)

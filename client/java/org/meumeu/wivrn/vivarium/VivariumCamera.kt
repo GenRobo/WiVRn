@@ -37,7 +37,8 @@ class VivariumCamera(private val activity: MainActivity) {
     /**
      * Starts enabled sensors; camera metadata and capture are required only for images or
      * markers. [codec] is `h264` or `jpeg`; the stream size and bitrate are the client
-     * settings `camera_stream_*` (sensors.cpp passes them with the switches).
+     * settings `camera_stream_*` (sensors.cpp passes them with the switches); [detectScale]
+     * is the marker detector's image scale ([DetectScale]).
      */
     fun start(
         markerTracking: Boolean,
@@ -47,6 +48,7 @@ class VivariumCamera(private val activity: MainActivity) {
         streamWidth: Int,
         streamHeight: Int,
         bitrateMbps: Int,
+        detectScale: Float,
     ): Boolean {
         if (stream != null) return true
         val s = CameraStream(
@@ -59,6 +61,7 @@ class VivariumCamera(private val activity: MainActivity) {
             codec,
             StreamSize(streamWidth, streamHeight),
             bitrateMbps,
+            detectScale,
         )
         try {
             if (!s.start()) return false

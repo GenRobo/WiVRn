@@ -354,6 +354,7 @@ const std::vector<config_field> & configuration::config_fields()
 	        scalar("camera_stream_width", &configuration::camera_stream_width),
 	        scalar("camera_stream_height", &configuration::camera_stream_height),
 	        scalar("camera_stream_bitrate_mbps", &configuration::camera_stream_bitrate_mbps),
+	        scalar("marker_detect_scale", &configuration::marker_detect_scale),
 	};
 	return fields;
 }
