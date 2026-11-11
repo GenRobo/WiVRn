@@ -24,10 +24,12 @@ import kotlin.math.roundToInt
 /**
  * The image the marker detector searches: a frame wider than [FULL_WIDTH] is scaled by
  * [scale] (clamped to [MIN_SCALE]..1) to [detectWidth]x[detectHeight] first, so the
- * candidate search costs a quarter of the frame at the default 0.5; a narrower frame is
- * searched as is. [toFrame] maps corners found in the scaled image back to frame pixels,
- * where they are refined to subpixel precision on the full-resolution frame, so the scale
- * costs candidate recall on small markers but not corner precision.
+ * candidate search costs a quarter of the frame at 0.5; a narrower frame, or any frame
+ * at the default scale of 1, is searched as is. [toFrame] maps corners found in the
+ * scaled image back to frame pixels, where they are refined to subpixel precision on
+ * the full-resolution frame, so the scale costs candidate recall on small markers but
+ * not corner precision. Half scale lost five of six 70 mm markers at the operator's
+ * distance (about 25 px a side, under the detector's recall floor), hence the default.
  */
 class DetectScale(val width: Int, val height: Int, scale: Float) {
     val scale = if (width > FULL_WIDTH) scale.coerceIn(MIN_SCALE, 1f) else 1f
@@ -53,7 +55,7 @@ class DetectScale(val width: Int, val height: Int, scale: Float) {
     companion object {
         /** Frames up to this wide are searched at full resolution. */
         const val FULL_WIDTH = 640
-        const val DEFAULT = 0.5f
+        const val DEFAULT = 1f
         const val MIN_SCALE = 0.25f
 
         /**

@@ -26,8 +26,16 @@ import org.junit.Test
 
 class DetectScaleTest {
     @Test
-    fun wideFramesAreSearchedAtHalfSize() {
+    fun defaultSearchesTheFullFrame() {
         val scale = DetectScale(1280, 960, DetectScale.DEFAULT)
+        assertFalse(scale.scaled)
+        assertEquals(1280, scale.detectWidth)
+        assertEquals(960, scale.detectHeight)
+    }
+
+    @Test
+    fun wideFramesAreSearchedAtHalfSizeWhenAsked() {
+        val scale = DetectScale(1280, 960, 0.5f)
         assertTrue(scale.scaled)
         assertEquals(640, scale.detectWidth)
         assertEquals(480, scale.detectHeight)
@@ -35,7 +43,7 @@ class DetectScaleTest {
 
     @Test
     fun framesUpToSixHundredFortyWideAreSearchedAsIs() {
-        val scale = DetectScale(640, 480, DetectScale.DEFAULT)
+        val scale = DetectScale(640, 480, 0.5f)
         assertFalse(scale.scaled)
         assertEquals(640, scale.detectWidth)
         assertEquals(480, scale.detectHeight)

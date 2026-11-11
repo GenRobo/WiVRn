@@ -29,13 +29,13 @@ class DetectorStatsTest {
         var threadCounts = 0
         val threads = { threadCounts++; 1 }
         // 14 frames of 11.2 ms CPU over the first 0.95 s: nothing yet.
-        for (n in 0 until 14) assertNull(stats.add(n * 67_500_000L, 11_200_000L, threads))
+        for (n in 0 until 14) assertNull(stats.add(n * 67_500_000L, 11_200_000L, if (n == 7) 6 else 3, threads))
         assertEquals(0, threadCounts)
         // The 15th frame lands at 1.0125 s: 15 frames over that is 14.8 Hz.
-        assertEquals("14.8 Hz, 11.2 ms/frame, 1 thread", stats.add(14 * 67_500_000L + 67_500_000L, 11_200_000L, threads))
+        assertEquals("14.8 Hz, 11.2 ms/frame, 1 thread, 6 markers max", stats.add(14 * 67_500_000L + 67_500_000L, 11_200_000L, 0, threads))
         assertEquals(1, threadCounts)
         // A new period starts from that frame's time: two frames over the next second.
-        assertNull(stats.add(1_500_000_000L, 5_000_000L, threads))
-        assertEquals("2.0 Hz, 5.0 ms/frame, 6 threads", stats.add(2_012_500_000L, 5_000_000L) { 6 })
+        assertNull(stats.add(1_500_000_000L, 5_000_000L, 0, threads))
+        assertEquals("2.0 Hz, 5.0 ms/frame, 6 threads, 1 marker max", stats.add(2_012_500_000L, 5_000_000L, 1) { 6 })
     }
 }

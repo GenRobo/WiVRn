@@ -129,7 +129,8 @@ public:
 	bool depth_camera_streaming = false;
 	// Marker detection searches a copy of the camera frame scaled by this (0.25 to 1;
 	// frames up to 640 px wide are searched as is), then refines corners on the full frame.
-	float marker_detect_scale = 0.5;
+	// 1 by default: half scale lost 70 mm markers at ~1 m (~25 px a side) on the Quest 3.
+	float marker_detect_scale = 1;
 
 	bool check_feature(feature f) const;
 	void set_feature(feature f, bool state);

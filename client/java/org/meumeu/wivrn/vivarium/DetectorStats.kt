@@ -21,34 +21,41 @@ package org.meumeu.wivrn.vivarium
 import java.util.Locale
 
 /**
- * The marker detector's measured rate and CPU cost, summarized once per [periodNs] as
- * `14.8 Hz, 11.2 ms/frame, 1 thread`: frames processed over the period's wall time, the
- * detector thread's CPU time per frame, and how many threads carry the detector's name
- * (OpenCV's worker pool inherits it, so more than one means the pool is still in use).
+ * The marker detector's measured rate, CPU cost and yield, summarized once per [periodNs]
+ * as `14.8 Hz, 11.2 ms/frame, 1 thread, 6 markers max`: frames processed over the period's
+ * wall time, the detector thread's CPU time per frame, how many threads carry the
+ * detector's name (OpenCV's worker pool inherits it, so more than one means the pool
+ * is still in use), and the most markers one frame held (a drop after a scale change
+ * means the search lost recall).
  */
 class DetectorStats(private val periodNs: Long = 60_000_000_000L) {
     private var periodStartNs = Long.MIN_VALUE
     private var frames = 0
     private var cpuNs = 0L
+    private var maxMarkers = 0
 
     /**
-     * Records a frame that took [frameCpuNs] of CPU, finished at [nowNs]; returns the
-     * summary line when a period has elapsed, counting [threads] at that moment, else null.
+     * Records a frame that took [frameCpuNs] of CPU and held [markers], finished at
+     * [nowNs]; returns the summary line when a period has elapsed, counting [threads]
+     * at that moment, else null.
      */
-    fun add(nowNs: Long, frameCpuNs: Long, threads: () -> Int): String? {
+    fun add(nowNs: Long, frameCpuNs: Long, markers: Int, threads: () -> Int): String? {
         if (periodStartNs == Long.MIN_VALUE) periodStartNs = nowNs
         frames++
         cpuNs += frameCpuNs
+        if (markers > maxMarkers) maxMarkers = markers
         val elapsedNs = nowNs - periodStartNs
         if (elapsedNs < periodNs) return null
         val count = threads()
         val line = String.format(
-            Locale.US, "%.1f Hz, %.1f ms/frame, %d thread%s",
+            Locale.US, "%.1f Hz, %.1f ms/frame, %d thread%s, %d marker%s max",
             frames * 1e9 / elapsedNs, cpuNs / 1e6 / frames, count, if (count == 1) "" else "s",
+            maxMarkers, if (maxMarkers == 1) "" else "s",
         )
         periodStartNs = nowNs
         frames = 0
         cpuNs = 0
+        maxMarkers = 0
         return line
     }
 }

@@ -116,7 +116,7 @@ class MarkerDetector(
                 val end = System.nanoTime()
                 report.detectUs = ((end - start) / 1000).toInt()
                 send(report)
-                stats.add(end, Debug.threadCpuTimeNanos() - cpuStart) { threadsNamed(threadName) }?.let { Log.i(TAG, it) }
+                stats.add(end, Debug.threadCpuTimeNanos() - cpuStart, report.count) { threadsNamed(threadName) }?.let { Log.i(TAG, it) }
             }
         } finally {
             corners.forEach(Mat::release)
