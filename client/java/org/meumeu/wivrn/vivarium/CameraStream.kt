@@ -413,22 +413,46 @@ class CameraStream(
     )
 
     /** Camera thread: a frame from the capture or stream reader, for [detect]ion and/or the [stream]. */
+    // Camera-thread cost, logged once a second: frames seen, luma copies and encoder
+    // copies with their time (GRID #2463: the thread ran a whole core at 30 Hz, 2026-11-11).
+    private var statFrames = 0
+    private var statLuma = 0
+    private var statLumaNs = 0L
+    private var statEncode = 0
+    private var statEncodeNs = 0L
+    private var statOtherNs = 0L
+    private var statSinceMs = 0L
+
     private fun onImage(imageReader: ImageReader, detect: Boolean, stream: Boolean) {
+        val entered = System.nanoTime()
         val image = imageReader.acquireNextImage() ?: return
         image.use {
             if (!linked) return
+            statFrames++
             val current = config
             val dictionary = current.detectDictionary
             if (detect && detectorReady && dictionary != null && detectGate.accept(it.timestamp, current.detectRateHz)) {
                 val plane = it.planes[0]
+                val t0 = System.nanoTime()
                 latest.back().apply {
                     copyLuma(plane.buffer, plane.rowStride)
                     sensorTimestampNs = it.timestamp
                     this.dictionary = dictionary
                 }
+                statLuma++
+                statLumaNs += System.nanoTime() - t0
                 awaitingDetectionNs = it.timestamp
                 pendingResults[it.timestamp]?.let { result -> publishDetection(result) }
             }
+            val nowMs = SystemClock.elapsedRealtime()
+            if (nowMs - statSinceMs >= 1000) {
+                if (statSinceMs != 0L) {
+                    Log.i(TAG, "camera thread: ${statFrames} frames/s, luma ${statLuma} x ${statLumaNs / maxOf(1, statLuma) / 1000} us, encode copy ${statEncode} x ${statEncodeNs / maxOf(1, statEncode) / 1000} us, other ${statOtherNs / maxOf(1, statFrames) / 1000} us/frame")
+                }
+                statSinceMs = nowMs
+                statFrames = 0; statLuma = 0; statLumaNs = 0; statEncode = 0; statEncodeNs = 0; statOtherNs = 0
+            }
+            statOtherNs += System.nanoTime() - entered
             if (!stream || !rgbCameraStreaming) return
             if (h264 && current.images != imagesWanted) {
                 // The PC decodes nothing until an IDR: request one when images are (re)enabled.
@@ -472,7 +496,10 @@ class CameraStream(
                 Log.e(TAG, "H.264 encoder gives no input image; frame dropped")
                 return
             }
+            val t0 = System.nanoTime()
             copyYuv420(image, input)
+            statEncode++
+            statEncodeNs += System.nanoTime() - t0
             encoder.queueInputBuffer(index, 0, streamSize.width * streamSize.height * 3 / 2, presentationUs, 0)
         } catch (error: IllegalStateException) {
             // The codec is in error (onError logs it); keep the camera thread alive.

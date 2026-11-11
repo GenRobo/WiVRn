@@ -123,6 +123,8 @@ internal fun probeInterleavedOrder(u: ByteBuffer, uPixelStride: Int, v: ByteBuff
     return if (vFirst) 2 else 0
 }
 
+private var layoutLogged = false
+
 internal fun copyYuv420(src: Image, dst: Image) {
     val width = src.width
     val height = src.height
@@ -131,6 +133,10 @@ internal fun copyYuv420(src: Image, dst: Image) {
     copyPlane(width, height, from[0].buffer, from[0].rowStride, from[0].pixelStride, to[0].buffer, to[0].rowStride, to[0].pixelStride)
     val srcFirst = interleavedOrder(from[1].buffer, from[1].pixelStride, from[2].buffer, from[2].pixelStride)
     val dstFirst = probeInterleavedOrder(to[1].buffer, to[1].pixelStride, to[2].buffer, to[2].pixelStride)
+    if (!layoutLogged) {
+        layoutLogged = true
+        android.util.Log.i("SensorStreaming", "yuv copy: src strides ${from.map { "${it.rowStride}/${it.pixelStride}" }} order $srcFirst, dst strides ${to.map { "${it.rowStride}/${it.pixelStride}" }} order $dstFirst")
+    }
     if (srcFirst != 0 && srcFirst == dstFirst) {
         // Both sides interleave their chroma in the same order (NV12 or NV21): each plane's
         // row is one run of `width - 1` bytes from its first sample to its last, with the other
