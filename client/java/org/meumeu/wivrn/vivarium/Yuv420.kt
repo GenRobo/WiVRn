@@ -83,15 +83,44 @@ internal fun copyPlane(
 
 /** Copies a YUV_420_888 [src] into the same-sized encoder input image [dst], plane by plane. */
 /**
- * Which chroma plane (1 = U, 2 = V) starts the interleaved block, or 0 when the chroma is
- * planar. Android maps both planes of an interleaved block onto one buffer, one byte apart,
- * so the plane that starts first has the longer buffer.
+ * Which chroma plane (1 = U, 2 = V) starts an interleaved block, read from the samples: the
+ * two planes are views of one buffer one byte apart, so with U first `U[k + 1]` is `V[k]`,
+ * with V first `V[k + 1]` is `U[k]`. 0 when the planes are not interleaved or neither
+ * relation holds over [samples] pairs; a uniform region satisfies both and either order
+ * copies it right. Android gives both planes the same length, so lengths tell nothing.
  */
-internal fun firstChromaPlane(uRemaining: Int, uPixelStride: Int, vRemaining: Int, vPixelStride: Int): Int = when {
-    uPixelStride != 2 || vPixelStride != 2 -> 0
-    uRemaining > vRemaining -> 1
-    vRemaining > uRemaining -> 2
-    else -> 0
+internal fun interleavedOrder(u: ByteBuffer, uPixelStride: Int, v: ByteBuffer, vPixelStride: Int, samples: Int = 16): Int {
+    if (uPixelStride != 2 || vPixelStride != 2) return 0
+    val pairs = minOf(samples, (minOf(u.remaining(), v.remaining()) - 1) / 2)
+    if (pairs <= 0) return 0
+    var uFirst = true
+    var vFirst = true
+    for (i in 0 until pairs) {
+        val k = 2 * i
+        if (u.get(u.position() + k + 1) != v.get(v.position() + k)) uFirst = false
+        if (v.get(v.position() + k + 1) != u.get(u.position() + k)) vFirst = false
+    }
+    return if (uFirst) 1 else if (vFirst) 2 else 0
+}
+
+/**
+ * [interleavedOrder] for a writable block whose content is unknown (a codec input image):
+ * a byte written through one plane is read back through the other, then restored.
+ */
+internal fun probeInterleavedOrder(u: ByteBuffer, uPixelStride: Int, v: ByteBuffer, vPixelStride: Int): Int {
+    if (uPixelStride != 2 || vPixelStride != 2 || u.remaining() < 2 || v.remaining() < 2) return 0
+    val mark = u.get(u.position() + 1)
+    val probe = (mark + 1).toByte()
+    u.put(u.position() + 1, probe)
+    val uFirst = v.get(v.position()) == probe
+    u.put(u.position() + 1, mark)
+    if (uFirst) return 1
+    val markV = v.get(v.position() + 1)
+    val probeV = (markV + 1).toByte()
+    v.put(v.position() + 1, probeV)
+    val vFirst = u.get(u.position()) == probeV
+    v.put(v.position() + 1, markV)
+    return if (vFirst) 2 else 0
 }
 
 internal fun copyYuv420(src: Image, dst: Image) {
@@ -100,12 +129,12 @@ internal fun copyYuv420(src: Image, dst: Image) {
     val from = src.planes
     val to = dst.planes
     copyPlane(width, height, from[0].buffer, from[0].rowStride, from[0].pixelStride, to[0].buffer, to[0].rowStride, to[0].pixelStride)
-    val srcFirst = firstChromaPlane(from[1].buffer.remaining(), from[1].pixelStride, from[2].buffer.remaining(), from[2].pixelStride)
-    val dstFirst = firstChromaPlane(to[1].buffer.remaining(), to[1].pixelStride, to[2].buffer.remaining(), to[2].pixelStride)
+    val srcFirst = interleavedOrder(from[1].buffer, from[1].pixelStride, from[2].buffer, from[2].pixelStride)
+    val dstFirst = probeInterleavedOrder(to[1].buffer, to[1].pixelStride, to[2].buffer, to[2].pixelStride)
     if (srcFirst != 0 && srcFirst == dstFirst) {
         // Both sides interleave their chroma in the same order (NV12 or NV21): the block is
         // one packed row of `width` bytes per chroma line from the first plane, moved in bulk
-        // (the per-sample path below costs the Quest ~25 % CPU at 30 Hz, live 2026-11-11).
+        // (the per-sample path below costs the Quest a whole core at 30 Hz, live 2026-11-11).
         copyPlane(width, height / 2, from[srcFirst].buffer, from[srcFirst].rowStride, 1, to[dstFirst].buffer, to[dstFirst].rowStride, 1)
         return
     }

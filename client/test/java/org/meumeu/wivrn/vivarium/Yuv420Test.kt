@@ -154,9 +154,16 @@ class Yuv420Test {
         val dst = ByteBuffer.wrap(ByteArray(8) { 77 })
         val dstV = dst.duplicate().apply { position(0) }
         val dstU = dst.duplicate().apply { position(1) }
-        assertEquals(1, firstChromaPlane(srcU.remaining(), 2, srcV.remaining(), 2))
-        assertEquals(2, firstChromaPlane(dstU.remaining(), 2, dstV.remaining(), 2))
-        assertEquals(0, firstChromaPlane(8, 1, 8, 1))
+        assertEquals(1, interleavedOrder(srcU, 2, srcV, 2))
+        assertEquals(2, probeInterleavedOrder(dstU, 2, dstV, 2))
+        assertArrayEquals(ByteArray(8) { 77 }, dst.array()) // the probe restores what it touched
+        assertEquals(0, interleavedOrder(srcU, 1, srcV, 1))
+        // A uniform region satisfies both relations: U first is reported, either order copies it.
+        val flat = ByteBuffer.wrap(ByteArray(10) { 5 })
+        assertEquals(1, interleavedOrder(flat.duplicate(), 2, flat.duplicate().apply { position(1) }, 2))
+        // Planes that do not alias each other are not interleaved, whatever their strides say.
+        val apart = ByteBuffer.wrap(byteArrayOf(1, 2, 3, 4, 5, 6, 7, 8))
+        assertEquals(0, interleavedOrder(apart.duplicate(), 2, apart.duplicate().apply { position(4) }, 2))
 
         copyPlane(2, 2, srcU, 5, 2, dstU, 4, 2)
         copyPlane(2, 2, srcV, 5, 2, dstV, 4, 2)
