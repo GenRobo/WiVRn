@@ -25,6 +25,7 @@
 #include <tuple>
 
 #include <jni.h>
+#include <pthread.h>
 #include <type_traits>
 
 namespace jni
@@ -61,7 +62,17 @@ public:
 		if (inst.vm)
 			return;
 		inst.vm = vm;
-		inst.vm->AttachCurrentThread(&inst.jni_env, nullptr);
+		// ART renames the native thread after the java.lang.Thread it attaches it to, "Thread-N"
+		// when none is given: hand it the name the thread already has so the kernel comm (what
+		// perfetto and ps show) survives the attach (GRID #3095).
+		char name[16] = {};
+		pthread_getname_np(pthread_self(), name, sizeof(name));
+		JavaVMAttachArgs args{
+		        .version = JNI_VERSION_1_6,
+		        .name = name,
+		        .group = nullptr,
+		};
+		inst.vm->AttachCurrentThread(&inst.jni_env, &args);
 	}
 
 	static void setup_thread(JNIEnv * env)

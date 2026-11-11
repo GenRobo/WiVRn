@@ -222,6 +222,13 @@ public:
 	{
 		return instance().input_handler;
 	}
+
+	// Declares the calling thread to the OpenXR runtime (XR_KHR_android_thread_settings, GRID
+	// #3095) so it raises its scheduling class. Call it from the thread itself, after setup_jni.
+	static void set_xr_thread_type(XrAndroidThreadTypeKHR type)
+	{
+		instance().xr_session.set_android_thread_type(type);
+	}
 #endif
 
 	static bool is_session_running()

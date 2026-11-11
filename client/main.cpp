@@ -31,6 +31,7 @@
 #include "spdlog/sinks/android_sink.h"
 #include <android/native_window.h>
 #include <android_native_app_glue.h>
+#include <pthread.h>
 #else
 #include "spdlog/sinks/stdout_color_sinks.h"
 #endif
@@ -94,6 +95,10 @@ void android_main(android_app * native_app)
 	static auto logger = spdlog::android_logger_mt("WiVRn", "WiVRn");
 
 	spdlog::set_default_logger(logger);
+
+	// native_app_glue creates this thread without a name (it inherits the Java main thread's comm);
+	// name it before application attaches it to the JVM so ART keeps the name (GRID #3095).
+	pthread_setname_np(pthread_self(), "android_main");
 
 	real_main(native_app);
 }

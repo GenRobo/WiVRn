@@ -36,6 +36,33 @@ adb shell setprop persist.traced.enable 1
 Then use the [Perfetto UI](https://ui.perfetto.dev/) → connect device. See the
 [Android tracing quickstart](https://perfetto.dev/docs/quickstart/android-tracing).
 
+### Client thread names and priorities
+
+The client declares its threads to the runtime with `XR_KHR_android_thread_settings` so the
+compositor's scheduler raises them: `application_thread` (the OpenXR frame loop) as
+`renderer_main`, `android_main` (the activity event loop) as `application_main`, and
+`network_thread`, `tracking_thread` and the `decoder-N` MediaCodec feeders as
+`application_worker`. Every thread created through `utils::named_thread` names itself before it
+runs, and the name is handed to ART on JNI attach, so traces and `ps` show the names above instead
+of `Thread-N` (the camera threads, `sensor-camera` and the `marker-detector` at background priority,
+are Kotlin and unchanged). The log says what was registered:
+
+```
+thread settings: renderer_main tid 24929 (application_thr)
+```
+
+(`XR_KHR_android_thread_settings is absent` when the runtime lacks the extension.) To check the
+effect on a headset, during a session:
+
+```bash
+WIVRN_PKG=$(adb shell pm list packages | grep wivrn | cut -d: -f2)
+adb shell ps -T -p $(adb shell pidof ${WIVRN_PKG}) -o tid,pri,ni,rtprio,cls,comm
+```
+
+Expect `application_thr` in an elevated class (`FF`/`RR` with an `rtprio`, or a negative `ni`), the
+workers above the default `ni 0`, and `marker-detector` at `ni 10`. In a Perfetto trace the same
+threads should no longer wait for a CPU (`Runnable` slices) while `OVR::TimeWarp` runs.
+
 ## Backends — `WIVRN_TRACING`
 
 `WIVRN_TRACING` enables tracing and selects how it is collected. Unset/`off` = disabled; unknown
