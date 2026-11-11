@@ -350,6 +350,7 @@ const std::vector<config_field> & configuration::config_fields()
 	        scalar("marker_tracking", &configuration::marker_tracking),
 	        scalar("rgb_camera_streaming", &configuration::rgb_camera_streaming),
 	        scalar("depth_camera_streaming", &configuration::depth_camera_streaming),
+	        scalar("marker_detect_scale", &configuration::marker_detect_scale),
 	};
 	return fields;
 }

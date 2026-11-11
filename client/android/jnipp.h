@@ -111,6 +111,32 @@ struct Int
 	}
 };
 
+struct Float
+{
+	constexpr static auto static_field = &_JNIEnv::GetStaticFloatField;
+	constexpr static auto obj_field = &_JNIEnv::GetFloatField;
+	constexpr static const auto call_method = &_JNIEnv::CallFloatMethod;
+	constexpr static const auto call_static_method = &_JNIEnv::CallStaticFloatMethod;
+
+	static std::string type()
+	{
+		return "F";
+	}
+
+	float value;
+
+	// A float argument of a variadic JNI call is promoted to double, as JNI expects.
+	float handle() const
+	{
+		return value;
+	}
+
+	operator float() const
+	{
+		return value;
+	}
+};
+
 namespace details
 {
 
