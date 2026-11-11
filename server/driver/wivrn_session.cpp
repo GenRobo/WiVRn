@@ -334,6 +334,26 @@ wivrn::wivrn_session::wivrn_session(std::unique_ptr<wivrn_connection> connection
 			U_LOG_E("app-data %s: cannot create relay: %s", sink.channel.c_str(), e.what());
 		}
 	}
+	// Live mirror (GRID #2463): one stream's bytes go to the mirror sink while it listens; the
+	// sink's own bytes (none expected) are dropped, and every connection starts with an IDR.
+	if (conf.mirror)
+	{
+		try
+		{
+			auto relay = std::make_unique<app_data_relay>(*this, conf.mirror->sink);
+			relay->on_sink_data = [](std::string_view) {};
+			relay->on_connected = [this, stream = conf.mirror->stream] {
+				U_LOG_I("mirror: sink connected, forcing an IDR on stream %d", int(stream));
+				compositor.reset_encoder(stream);
+			};
+			compositor.set_mirror(conf.mirror->stream, relay.get());
+			app_data_relays.push_back(std::move(relay));
+		}
+		catch (const std::exception & e)
+		{
+			U_LOG_E("mirror: cannot create relay: %s", e.what());
+		}
+	}
 	// Telemetry connector (GRID #2834 M4): the monitor's lines go to the wivrn-health sink, and
 	// what the sink writes (application warnings and metrics) goes to the monitor, not the headset.
 	if (conf.health.app_data)

@@ -99,5 +99,13 @@ public:
 
 	// Set before resume(). Receives what the sink writes, on the relay thread.
 	std::function<void(std::string_view)> on_sink_data;
+	// Set before resume(). Runs on the relay thread each time the sink connects.
+	std::function<void()> on_connected;
+
+	// Whether a sink is connected now: a producer may skip building data that would be dropped
+	bool is_connected() const
+	{
+		return connected.load(std::memory_order_relaxed);
+	}
 };
 } // namespace wivrn

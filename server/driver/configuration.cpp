@@ -195,24 +195,40 @@ configuration::configuration()
 			}
 		}
 
+		// host:port, [v6]:port or v6%zone:port (the zone may contain '%' and ':' only inside brackets)
+		auto parse_connect = [](const std::string & key, const std::string & connect, app_data_sink & sink) {
+			auto colon = connect.rfind(':');
+			if (colon == std::string::npos or colon == 0 or colon + 1 == connect.size())
+				throw std::runtime_error(key + ": invalid \"connect\" address " + connect + ", expected host:port");
+			sink.host = connect.substr(0, colon);
+			sink.port = connect.substr(colon + 1);
+			if (sink.host.front() == '[' and sink.host.back() == ']')
+				sink.host = sink.host.substr(1, sink.host.size() - 2);
+		};
 		if (auto it = json.find("app-data"); it != json.end())
 		{
 			for (const auto & item: *it)
 			{
 				app_data_sink sink{.channel = item.at("channel")};
-				std::string connect = item.at("connect");
-				// host:port, [v6]:port or v6%zone:port (the zone may contain '%' and ':' only inside brackets)
-				auto colon = connect.rfind(':');
-				if (colon == std::string::npos or colon == 0 or colon + 1 == connect.size())
-					throw std::runtime_error("app-data: invalid \"connect\" address " + connect + ", expected host:port");
-				sink.host = connect.substr(0, colon);
-				sink.port = connect.substr(colon + 1);
-				if (sink.host.front() == '[' and sink.host.back() == ']')
-					sink.host = sink.host.substr(1, sink.host.size() - 2);
+				parse_connect("app-data", item.at("connect"), sink);
 				if (sink.channel.empty())
-					throw std::runtime_error("app-data: empty channel for " + connect);
+					throw std::runtime_error("app-data: empty channel for " + sink.host + ":" + sink.port);
 				app_data.push_back(std::move(sink));
 			}
+		}
+
+		if (auto it = json.find("mirror"); it != json.end() and it->is_object())
+		{
+			mirror_options m{.sink = {.channel = "wivrn-mirror"}};
+			parse_connect("mirror", it->at("connect"), m.sink);
+			if (auto s = it->find("stream"); s != it->end())
+			{
+				int stream = *s;
+				if (stream < 0 or stream > 2)
+					throw std::runtime_error("mirror: \"stream\" must be 0 (left), 1 (right) or 2 (alpha)");
+				m.stream = uint8_t(stream);
+			}
+			mirror = std::move(m);
 		}
 
 		// Gates the uinput mirror of forwarded input devices. The OpenXR gamepad needs no

@@ -216,6 +216,8 @@ void app_data_relay::run(std::stop_token stop)
 			U_LOG_I("app-data %s: connected to %s:%s", sink.channel.c_str(), sink.host.c_str(), sink.port.c_str());
 			overflowed = false;
 			connected = true;
+			if (on_connected)
+				on_connected();
 			std::string reason;
 			try
 			{

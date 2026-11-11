@@ -43,6 +43,7 @@ namespace wivrn
 
 class wivrn_session;
 class video_encoder;
+class app_data_relay;
 
 class compositor : public comp_base
 {
@@ -195,6 +196,9 @@ public:
 	void set_framerate(float hz);
 
 	void set_bitrate(uint32_t);
+	// Live mirror (GRID #2463): copy a stream's bytes to a relay; force its next frame to an IDR
+	void set_mirror(uint8_t stream, app_data_relay * relay);
+	void reset_encoder(uint8_t stream);
 	void update_tracking(const from_headset::tracking &);
 	void update_foveation_center_override(const from_headset::override_foveation_center &);
 

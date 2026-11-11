@@ -840,6 +840,20 @@ void compositor::update_foveation_center_override(const from_headset::override_f
 	foveation.update_foveation_center_override(center);
 }
 
+void compositor::set_mirror(uint8_t stream, app_data_relay * relay)
+{
+	if (stream < encoders.size() and encoders[stream])
+		encoders[stream]->set_mirror(relay);
+	else
+		U_LOG_W("mirror: stream %d does not exist in this session", int(stream));
+}
+
+void compositor::reset_encoder(uint8_t stream)
+{
+	if (stream < encoders.size() and encoders[stream])
+		encoders[stream]->reset();
+}
+
 void compositor::resume()
 {
 	for (auto & encoder: encoders)
