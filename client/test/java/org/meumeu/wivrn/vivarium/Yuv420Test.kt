@@ -107,4 +107,53 @@ class Yuv420Test {
         copyYuv420ToNv21(2, 2, y, 2, 1, u, 1, 1, v, 1, 1, nv21)
         assertArrayEquals(byteArrayOf(1, 2, 3, 4, 23, 73), nv21)
     }
+
+    @Test
+    fun copyPlaneBulkPathSkipsRowPaddingOnBothSidesAndRestoresBuffers() {
+        val src = ByteBuffer.wrap(byteArrayOf(
+            99, 99, 1, 2, 3, 4, 99, 99, 5, 6, 7, 8, 99, 99, 9, 10, 11, 12,
+        )).apply { position(2); limit(18) }
+        val dst = ByteBuffer.wrap(ByteArray(19) { 77 }).apply { position(1); limit(18) }
+
+        copyPlane(4, 3, src, 6, 1, dst, 6, 1)
+
+        assertArrayEquals(byteArrayOf(
+            77, 1, 2, 3, 4, 77, 77, 5, 6, 7, 8, 77, 77, 9, 10, 11, 12, 77, 77,
+        ), dst.array())
+        assertEquals(2, src.position())
+        assertEquals(18, src.limit())
+        assertEquals(1, dst.position())
+        assertEquals(18, dst.limit())
+    }
+
+    @Test
+    fun copyPlanePlanarToInterleavedWritesEveryOtherByte() {
+        val u = ByteBuffer.wrap(byteArrayOf(21, 22, 99, 23, 24, 99)).apply { limit(5) }
+        val v = ByteBuffer.wrap(byteArrayOf(31, 32, 99, 33, 34))
+        // Semi-planar destination: U at even and V at odd offsets of one buffer, padded rows.
+        val chroma = ByteBuffer.wrap(ByteArray(12) { 77 })
+        val dstU = chroma.duplicate().apply { position(0) }
+        val dstV = chroma.duplicate().apply { position(1) }
+
+        copyPlane(2, 2, u, 3, 1, dstU, 6, 2)
+        copyPlane(2, 2, v, 3, 1, dstV, 6, 2)
+
+        assertArrayEquals(byteArrayOf(21, 31, 22, 32, 77, 77, 23, 33, 24, 34, 77, 77), chroma.array())
+        assertEquals(0, dstU.position())
+        assertEquals(1, dstV.position())
+        assertEquals(0, u.position())
+        assertEquals(5, u.limit())
+    }
+
+    @Test
+    fun copyPlaneInterleavedToPlanarDropsTheOtherChannel() {
+        val src = ByteBuffer.wrap(byteArrayOf(99, 1, 88, 2, 88, 0, 3, 88, 4)).apply { position(1); limit(9) }
+        val dst = ByteBuffer.wrap(ByteArray(6) { 77 }).apply { position(1) }
+
+        copyPlane(2, 2, src, 5, 2, dst, 2, 1)
+
+        assertArrayEquals(byteArrayOf(77, 1, 2, 3, 4, 77), dst.array())
+        assertEquals(1, src.position())
+        assertEquals(1, dst.position())
+    }
 }

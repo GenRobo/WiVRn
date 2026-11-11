@@ -42,6 +42,8 @@ object StreamFormat {
     const val TYPE_LINK_STATUS = 7
     const val TYPE_DEPTH = 8
     const val CODEC_JPEG = 1
+    /** Each FRAME payload is one Annex-B access unit; SPS and PPS precede every IDR. */
+    const val CODEC_H264 = 2
     /** Dictionary byte of the configure message that turns detection off. */
     const val DETECTION_OFF = 255
     const val TRANSPORT_NONE = 0

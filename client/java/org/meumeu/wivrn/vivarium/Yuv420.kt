@@ -18,7 +18,84 @@
 
 package org.meumeu.wivrn.vivarium
 
+import android.media.Image
 import java.nio.ByteBuffer
+
+/** An image size; `android.util.Size` is unusable in JVM unit tests. */
+data class StreamSize(val width: Int, val height: Int) {
+    override fun toString() = "${width}x$height"
+}
+
+/**
+ * The size the camera stream is encoded at: [configured] when the camera offers it as a
+ * YUV_420_888 output, else the [capture] size that marker detection uses anyway. The
+ * caller logs the fallback.
+ */
+internal fun chooseStreamSize(configured: StreamSize, supported: List<StreamSize>, capture: StreamSize): StreamSize =
+    if (configured == capture || configured in supported) configured else capture
+
+/**
+ * Copies one YUV_420_888 plane of [width] by [height] samples between buffers that each
+ * have their own row and pixel stride (a camera image to an encoder input image). Each
+ * plane starts at its buffer's current position; positions and limits are preserved.
+ * Chroma planes pass their own (halved) size. No scratch buffers are allocated.
+ */
+internal fun copyPlane(
+    width: Int,
+    height: Int,
+    src: ByteBuffer,
+    srcRowStride: Int,
+    srcPixelStride: Int,
+    dst: ByteBuffer,
+    dstRowStride: Int,
+    dstPixelStride: Int,
+) {
+    val srcStart = src.position()
+    val srcLimit = src.limit()
+    val dstStart = dst.position()
+    val dstLimit = dst.limit()
+    try {
+        if (srcPixelStride == 1 && dstPixelStride == 1) {
+            for (row in 0 until height) {
+                val from = srcStart + row * srcRowStride
+                src.limit(srcLimit)
+                src.position(from)
+                src.limit(from + width)
+                dst.position(dstStart + row * dstRowStride)
+                dst.put(src)
+            }
+        } else {
+            for (row in 0 until height) {
+                val from = srcStart + row * srcRowStride
+                val to = dstStart + row * dstRowStride
+                for (column in 0 until width) {
+                    dst.put(to + column * dstPixelStride, src.get(from + column * srcPixelStride))
+                }
+            }
+        }
+    } finally {
+        src.limit(srcLimit)
+        src.position(srcStart)
+        dst.limit(dstLimit)
+        dst.position(dstStart)
+    }
+}
+
+/** Copies a YUV_420_888 [src] into the same-sized encoder input image [dst], plane by plane. */
+internal fun copyYuv420(src: Image, dst: Image) {
+    val width = src.width
+    val height = src.height
+    val from = src.planes
+    val to = dst.planes
+    for (plane in 0..2) {
+        val divisor = if (plane == 0) 1 else 2
+        copyPlane(
+            width / divisor, height / divisor,
+            from[plane].buffer, from[plane].rowStride, from[plane].pixelStride,
+            to[plane].buffer, to[plane].rowStride, to[plane].pixelStride,
+        )
+    }
+}
 
 /**
  * Copies an even-sized YUV_420_888 image into a caller-owned, tightly packed NV21

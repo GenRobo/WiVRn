@@ -112,7 +112,16 @@ void vivarium::sensors::frame(XrTime display_time)
 	{
 		if (not (marker_tracking or rgb_camera_streaming) or camera.call<jni::Bool>("hasPermissions"))
 		{
-			camera_started = camera.call<jni::Bool>("start", jni::Bool(marker_tracking), jni::Bool(rgb_camera_streaming), jni::Bool(depth_camera_streaming));
+			// The stream settings have no lobby switch; read them when the capture starts.
+			const auto & config = application::get_config();
+			camera_started = camera.call<jni::Bool>("start",
+			                                        jni::Bool(marker_tracking),
+			                                        jni::Bool(rgb_camera_streaming),
+			                                        jni::Bool(depth_camera_streaming),
+			                                        jni::string(config.camera_stream_codec.c_str()),
+			                                        jni::Int(int(config.camera_stream_width)),
+			                                        jni::Int(int(config.camera_stream_height)),
+			                                        jni::Int(int(config.camera_stream_bitrate_mbps)));
 			if (camera_started)
 				spdlog::info("Sensor streaming: started");
 			else

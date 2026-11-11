@@ -308,8 +308,8 @@ default and saved in the client configuration:
 
 - **Marker tracking** (`marker_tracking`): detect ArUco markers and send their
   corner coordinates without requiring image streaming.
-- **RGB camera streaming** (`rgb_camera_streaming`): send color JPEG images
-  without requiring marker detection.
+- **RGB camera streaming** (`rgb_camera_streaming`): send color images (H.264
+  by default) without requiring marker detection.
 - **Depth camera streaming** (`depth_camera_streaming`): send environment depth
   without opening Camera2 capture.
 
@@ -317,6 +317,24 @@ Enable only the required switches in the lobby. A PC request cannot override a
 local off switch. Marker tracking and RGB capture need Camera and Headset Camera
 access; depth needs Spatial Data access. Replacing the former combined setting
 leaves the new switches off until explicitly enabled.
+
+The RGB stream has four settings without a lobby switch, in the client
+configuration file only:
+
+| Key | Default | Meaning |
+|---|---|---|
+| `camera_stream_codec` | `"h264"` | `"h264"`: the hardware encoder; `"jpeg"`: CPU JPEG at CONFIGURE's quality. |
+| `camera_stream_width` | `1280` | Streamed image width; with the height, one of the YUV_420_888 output sizes the camera reports (a second capture output next to the 1280x960 one detection uses). |
+| `camera_stream_height` | `960` | Streamed image height; a size the camera does not offer is logged and the 1280x960 capture is streamed. |
+| `camera_stream_bitrate_mbps` | `4` | H.264 target bitrate, variable-bitrate mode, in Mbit/s. |
+
+CALIBRATION carries the codec (`1` JPEG, `2` H264) and the streamed size;
+marker reports keep the 1280x960 capture size. With H.264 each FRAME payload is
+one access unit in Annex-B form (`00 00 00 01` start codes); SPS and PPS are
+in front of every IDR, one IDR per second and one on request when the PC
+enables images, so the PC feeds the payloads to an H.264 decoder in order and
+starts at the first IDR. With JPEG each payload is one JPEG image, decoded on its
+own. `maxRateHz` in CONFIGURE caps both; `jpegQuality` only matters for JPEG.
 
 **Camera and depth streaming are not recommended over Wi-Fi.** Prefer native
 USB networking or Ethernet for simultaneous rendered video and sensor streams.
@@ -326,9 +344,9 @@ The PC receiver uses the `vivarium-camera` application data channel, for example
 `"app-data": [{"channel": "vivarium-camera", "connect": "127.0.0.1:9760"}]`.
 No camera app, separate camera TCP connection, or ADB reverse is needed.
 
-The left passthrough camera produces color JPEG frames and on-headset OpenCV
-4.14 ArUco detections in VCAM version 1. Detection still uses luma; JPEG encoding
-includes the YUV source's chroma. CONFIGURE controls image and detection rates
+The left passthrough camera produces color H.264 or JPEG frames and on-headset
+OpenCV 4.14 ArUco detections in VCAM version 1. Detection still uses luma; the
+encoders include the YUV source's chroma. CONFIGURE controls image and detection rates
 within the locally enabled streams. Camera modes use their actual timestamp
 source for PING/PONG; depth-only uses CLOCK_BOOTTIME and does not query Camera2.
 LINK_STATUS reports route `2` (WiVRn) with Android's active-network transport.
@@ -337,7 +355,7 @@ resends its current CONFIGURE once per TCP connection. Camera frames and marker
 reports still require calibration; depth does not. CONFIGURE refreshes calibration
 for camera modes or real network status for depth-only, without an echo loop.
 Sensor messages are serialized before transport
-chunking, so concurrent JPEG, markers, status and depth cannot interleave bytes.
+chunking, so concurrent images, markers, status and depth cannot interleave bytes.
 
 Depth is opt-in through both the local switch and CONFIGURE's optional `>BH`
 depth flag/rate tail. The client requests Spatial Data permission only when

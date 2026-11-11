@@ -128,6 +128,14 @@ public:
 	bool rgb_camera_streaming = false;
 	bool depth_camera_streaming = false;
 
+	// RGB camera stream: "h264" (hardware encoder, the default) or "jpeg"; the streamed
+	// image size, used when the camera offers it (else the 1280x960 capture is sent);
+	// the H.264 bitrate.
+	std::string camera_stream_codec = "h264";
+	uint32_t camera_stream_width = 1280;
+	uint32_t camera_stream_height = 960;
+	uint32_t camera_stream_bitrate_mbps = 4;
+
 	bool check_feature(feature f) const;
 	void set_feature(feature f, bool state);
 
