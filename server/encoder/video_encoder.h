@@ -40,6 +40,7 @@ namespace wivrn
 struct encoder_settings;
 struct vk_bundle;
 class wivrn_session;
+class app_data_relay;
 
 inline const char * encoder_nvenc = "nvenc";
 inline const char * encoder_vaapi = "vaapi";
@@ -124,6 +125,10 @@ protected:
 	std::atomic_uint32_t pending_bitrate;
 	std::atomic<float> pending_framerate;
 	std::unique_ptr<idr_handler> idr;
+
+	// Live mirror (GRID #2463): the relay that receives a copy of every byte sent, or null.
+	// Set by the session once (set_mirror), read on the send thread.
+	std::atomic<app_data_relay *> mirror{nullptr};
 	const vk::Extent2D extent;
 
 public:
@@ -140,6 +145,11 @@ public:
 	                   uint64_t frame_index);
 
 	void on_feedback(const from_headset::feedback &);
+	// Copy every byte sent to the headset to `relay` while it has a sink (null: none).
+	void set_mirror(app_data_relay * relay)
+	{
+		mirror.store(relay, std::memory_order_relaxed);
+	}
 	void reset();
 
 	// bitrate_bps is the bitrate for the whole stream

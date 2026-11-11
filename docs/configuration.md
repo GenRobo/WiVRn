@@ -165,6 +165,19 @@ per-frame record. See [health.md](health.md) for the keys (`warnings`, `log`, `a
 }
 ```
 
+## `mirror`
+Default value: unset (off)
+
+Live mirror (GRID #2463): show what the headset is being sent, on the PC, without writing a
+file. `{"connect": "127.0.0.1:9763", "stream": 0}`: while something listens on `connect`, the
+encoded bitstream of `stream` (0 left eye, 1 right eye, 2 alpha; Annex-B `h264`/`h265`, `av1`
+OBUs) is copied to it byte for byte, exactly as sent to the headset, and an IDR is forced each
+time the sink connects so it decodes from its first bytes. Nothing is copied while no sink
+listens; the server retries the connection every 2 s. The picture is the encoded, foveated
+image (the periphery compressed), not the headset's final view. A slow sink is dropped (16 MiB
+of backlog) and reconnected. For example: `ffplay -fflags nobuffer -flags low_delay
+-framerate 72 -f hevc "tcp://127.0.0.1:9763?listen=1"`.
+
 ## `capture`
 Default value: unset (off)
 

@@ -59,6 +59,16 @@ struct configuration
 		std::string port;
 	};
 
+	// Live mirror (GRID #2463): the encoded bitstream of one stream, exactly the bytes sent to
+	// the headset, copied to a local TCP sink while one listens (an ffplay window on the PC);
+	// an IDR is forced whenever the sink connects so it can decode from its first bytes.
+	struct mirror_options
+	{
+		app_data_sink sink;
+		uint8_t stream = 0;
+	};
+	std::optional<mirror_options> mirror;
+
 	std::array<encoder, 3> encoders; // left, right, alpha
 	std::optional<uint8_t> bit_depth;
 	// Minimum application pacing margin in milliseconds, see docs/configuration.md

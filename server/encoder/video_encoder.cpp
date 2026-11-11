@@ -22,6 +22,8 @@
 
 #include "video_encoder.h"
 
+#include "driver/app_data_relay.h"
+
 #include "driver/health_frames.h"
 
 #include "encoder_settings.h"
@@ -370,6 +372,8 @@ void video_encoder::SendData(std::span<uint8_t> data, bool end_of_frame, bool co
 		video_dump.write((char *)data.data(), data.size());
 		video_dump_offset += data.size();
 	}
+	if (auto * relay = mirror.load(std::memory_order_relaxed); relay and relay->is_connected())
+		relay->from_server(std::string_view((const char *)data.data(), data.size()));
 	frame_bytes += uint32_t(data.size());
 	if (end_of_frame)
 	{
