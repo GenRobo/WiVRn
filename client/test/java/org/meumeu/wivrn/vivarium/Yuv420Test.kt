@@ -146,6 +146,23 @@ class Yuv420Test {
     }
 
     @Test
+    fun copyPlaneInterleavedToInterleavedKeepsEachChannelWhateverTheOrder() {
+        // Source NV12 rows (U V U V, row stride 5), destination NV21 (V U V U, row stride 4):
+        // copying each plane from its own first sample lands U on U and V on V.
+        val src = ByteBuffer.wrap(byteArrayOf(1, -1, 2, -2, 99, 3, -3, 4, -4, 99))
+        val srcU = src.duplicate().apply { position(0); limit(10) }
+        val srcV = src.duplicate().apply { position(1); limit(10) }
+        val dst = ByteBuffer.wrap(ByteArray(8) { 77 })
+        val dstV = dst.duplicate().apply { position(0) }
+        val dstU = dst.duplicate().apply { position(1) }
+
+        copyPlane(2, 2, srcU, 5, 2, dstU, 4, 2)
+        copyPlane(2, 2, srcV, 5, 2, dstV, 4, 2)
+
+        assertArrayEquals(byteArrayOf(-1, 1, -2, 2, -3, 3, -4, 4), dst.array())
+    }
+
+    @Test
     fun copyPlaneInterleavedToPlanarDropsTheOtherChannel() {
         val src = ByteBuffer.wrap(byteArrayOf(99, 1, 88, 2, 88, 0, 3, 88, 4)).apply { position(1); limit(9) }
         val dst = ByteBuffer.wrap(ByteArray(6) { 77 }).apply { position(1) }

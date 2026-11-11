@@ -55,12 +55,18 @@ internal fun copyPlane(
     val dstStart = dst.position()
     val dstLimit = dst.limit()
     try {
-        if (srcPixelStride == 1 && dstPixelStride == 1) {
+        if (srcPixelStride == dstPixelStride && srcPixelStride <= 2) {
+            // Packed (1) or interleaved chroma (2): each row is one contiguous run from the
+            // plane's first sample, so a bulk put moves it. An interleaved run carries the
+            // other chroma's samples between this plane's, in the same order on both sides
+            // whatever the U/V order of the underlying buffers, and its last foreign sample
+            // is the other plane's last, which that plane's own copy writes.
+            val run = (width - 1) * srcPixelStride + 1
             for (row in 0 until height) {
                 val from = srcStart + row * srcRowStride
                 src.limit(srcLimit)
                 src.position(from)
-                src.limit(from + width)
+                src.limit(from + run)
                 dst.position(dstStart + row * dstRowStride)
                 dst.put(src)
             }
