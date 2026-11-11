@@ -308,8 +308,8 @@ default and saved in the client configuration:
 
 - **Marker tracking** (`marker_tracking`): detect ArUco markers and send their
   corner coordinates without requiring image streaming.
-- **RGB camera streaming** (`rgb_camera_streaming`): send color JPEG images
-  without requiring marker detection.
+- **RGB camera streaming** (`rgb_camera_streaming`): send color images (H.264
+  by default) without requiring marker detection.
 - **Depth camera streaming** (`depth_camera_streaming`): send environment depth
   without opening Camera2 capture.
 
@@ -317,6 +317,25 @@ Enable only the required switches in the lobby. A PC request cannot override a
 local off switch. Marker tracking and RGB capture need Camera and Headset Camera
 access; depth needs Spatial Data access. Replacing the former combined setting
 leaves the new switches off until explicitly enabled.
+
+The RGB stream has four settings without a lobby switch, in the client
+configuration file only:
+
+| Key | Default | Meaning |
+|---|---|---|
+| `camera_stream_codec` | `"h264"` | `"h264"`: the hardware encoder; `"jpeg"`: CPU JPEG at CONFIGURE's quality. |
+| `camera_stream_width` | `1280` | Streamed image width; with the height, one of the YUV_420_888 output sizes the camera reports (a second capture output next to the 1280x960 one detection uses). |
+| `camera_stream_height` | `960` | Streamed image height; a size the camera does not offer is logged and the 1280x960 capture is streamed. |
+| `camera_stream_bitrate_mbps` | `4` | H.264 target bitrate, variable-bitrate mode, in Mbit/s. |
+| `camera_capture_fps` | `60` | Camera capture rate for detection and the stream, a fixed AE range the camera offers (the Quest 3 offers 30 and 60); 30 halves the frame delivery work when the PC asks for 15 frames a second or fewer. |
+
+CALIBRATION carries the codec (`1` JPEG, `2` H264) and the streamed size;
+marker reports keep the 1280x960 capture size. With H.264 each FRAME payload is
+one access unit in Annex-B form (`00 00 00 01` start codes); SPS and PPS are
+in front of every IDR, one IDR per second and one on request when the PC
+enables images, so the PC feeds the payloads to an H.264 decoder in order and
+starts at the first IDR. With JPEG each payload is one JPEG image, decoded on its
+own. `maxRateHz` in CONFIGURE caps both; `jpegQuality` only matters for JPEG.
 
 **Camera and depth streaming are not recommended over Wi-Fi.** Prefer native
 USB networking or Ethernet for simultaneous rendered video and sensor streams.
@@ -326,9 +345,9 @@ The PC receiver uses the `vivarium-camera` application data channel, for example
 `"app-data": [{"channel": "vivarium-camera", "connect": "127.0.0.1:9760"}]`.
 No camera app, separate camera TCP connection, or ADB reverse is needed.
 
-The left passthrough camera produces color JPEG frames and on-headset OpenCV
-4.14 ArUco detections in VCAM version 1. Detection still uses luma; JPEG encoding
-includes the YUV source's chroma. CONFIGURE controls image and detection rates
+The left passthrough camera produces color H.264 or JPEG frames and on-headset
+OpenCV 4.14 ArUco detections in VCAM version 1. Detection still uses luma; the
+encoders include the YUV source's chroma. CONFIGURE controls image and detection rates
 within the locally enabled streams. Camera modes use their actual timestamp
 source for PING/PONG; depth-only uses CLOCK_BOOTTIME and does not query Camera2.
 LINK_STATUS reports route `2` (WiVRn) with Android's active-network transport.
@@ -337,7 +356,29 @@ resends its current CONFIGURE once per TCP connection. Camera frames and marker
 reports still require calibration; depth does not. CONFIGURE refreshes calibration
 for camera modes or real network status for depth-only, without an echo loop.
 Sensor messages are serialized before transport
-chunking, so concurrent JPEG, markers, status and depth cannot interleave bytes.
+chunking, so concurrent images, markers, status and depth cannot interleave bytes.
+
+The marker detector is bounded so it cannot starve frame submission (GRID #3095):
+it runs on one background-priority thread with OpenCV's worker pool disabled, so
+its cost is at most one core and proportional to the frames it is given. Frames
+are dropped on the camera thread, before any copy, down to CONFIGURE's detection
+rate; while no marker has been seen for a second the client caps that at 15 Hz
+regardless of the commanded rate (the PC asks for its full rate until every
+target is anchored, and 15 Hz is enough to notice a marker appear). The PC can
+still ask for less. Candidates can be searched on a copy of the frame scaled by
+`marker_detect_scale` (client configuration, default `1.0`, clamped to 0.25..1;
+frames up to 640 px wide are always searched as is), after which each marker's
+corners are refined to subpixel precision on the full 1280×960 frame with
+OpenCV's own ArUco refinement window, so a scale costs candidate recall but not
+corner precision. Half scale is opt-in because it lost recall at the operator's
+distance: 70 mm markers at about 1 m are ~50 px a side on the 1280×960 camera,
+~25 px at half scale, below the detector's recall floor (one of six markers found,
+so the sheet never anchored). Once a minute the client logs
+`VivariumMarkers: 14.8 Hz, 11.2 ms/frame, 1 thread, 6 markers max`: the measured
+report rate, the detector thread's CPU time per frame, how many threads carry the
+`marker-detector` name (OpenCV workers inherit it; more than one means the pool
+is back), and the most markers one frame held over the minute, so a scale that
+loses recall shows up next to the CPU it saves.
 
 Depth is opt-in through both the local switch and CONFIGURE's optional `>BH`
 depth flag/rate tail. The client requests Spatial Data permission only when

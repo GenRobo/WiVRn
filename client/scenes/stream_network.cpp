@@ -32,6 +32,7 @@ void scenes::stream::process_packets()
 {
 #ifdef __ANDROID__
 	application::instance().setup_jni();
+	application::set_xr_thread_type(XR_ANDROID_THREAD_TYPE_APPLICATION_WORKER_KHR);
 #endif
 	while (state_ != state::shutdown)
 	{

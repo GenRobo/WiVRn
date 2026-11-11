@@ -236,6 +236,7 @@ void scenes::stream::tracking()
 #ifdef __ANDROID__
 	// Runtime may use JNI and needs the thread to be attached
 	application::instance().setup_jni();
+	application::set_xr_thread_type(XR_ANDROID_THREAD_TYPE_APPLICATION_WORKER_KHR);
 
 	XrTime next_battery_check = 0;
 	const XrDuration battery_check_interval = 30'000'000'000; // 30s

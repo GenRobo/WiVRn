@@ -350,6 +350,12 @@ const std::vector<config_field> & configuration::config_fields()
 	        scalar("marker_tracking", &configuration::marker_tracking),
 	        scalar("rgb_camera_streaming", &configuration::rgb_camera_streaming),
 	        scalar("depth_camera_streaming", &configuration::depth_camera_streaming),
+	        scalar("camera_stream_codec", &configuration::camera_stream_codec),
+	        scalar("camera_stream_width", &configuration::camera_stream_width),
+	        scalar("camera_stream_height", &configuration::camera_stream_height),
+	        scalar("camera_stream_bitrate_mbps", &configuration::camera_stream_bitrate_mbps),
+	        scalar("camera_capture_fps", &configuration::camera_capture_fps),
+	        scalar("marker_detect_scale", &configuration::marker_detect_scale),
 	};
 	return fields;
 }

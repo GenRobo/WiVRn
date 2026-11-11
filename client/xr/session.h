@@ -19,6 +19,10 @@
 
 #pragma once
 
+#ifdef XR_USE_PLATFORM_ANDROID
+#include <android_native_app_glue.h>
+#endif
+
 #include "utils/handle.h"
 #include "utils/thread_safe.h"
 #include <optional>
@@ -27,6 +31,7 @@
 #include <vector>
 #include <vulkan/vulkan_raii.hpp>
 #include <openxr/openxr.h>
+#include <openxr/openxr_platform.h>
 
 #include "hand_tracker.h"
 #include "passthrough.h"
@@ -52,6 +57,10 @@ class session : public utils::handle<XrSession, xrDestroySession>
 	PFN_xrEnumeratePerformanceMetricsCounterPathsMETA xrEnumeratePerformanceMetricsCounterPathsMETA = nullptr;
 	PFN_xrSetPerformanceMetricsStateMETA xrSetPerformanceMetricsStateMETA = nullptr;
 	PFN_xrQueryPerformanceMetricsCounterMETA xrQueryPerformanceMetricsCounterMETA = nullptr;
+
+#ifdef XR_USE_PLATFORM_ANDROID
+	PFN_xrSetAndroidApplicationThreadKHR xrSetAndroidApplicationThreadKHR = nullptr;
+#endif
 
 public:
 	session() = default;
@@ -113,5 +122,12 @@ public:
 	/// The counter's value, or nullopt when the path is XR_NULL_PATH, the query fails or the
 	/// runtime marks neither value valid. The unit is whatever the runtime reports.
 	std::optional<XrPerformanceMetricsCounterMETA> query_performance_metrics(XrPath counter);
+
+#ifdef XR_USE_PLATFORM_ANDROID
+	// XR_KHR_android_thread_settings (GRID #3095). Declares the calling thread to the runtime so
+	// it raises the thread's scheduling class; logs one line per call. A no-op without the
+	// extension (the constructor warns once).
+	void set_android_thread_type(XrAndroidThreadTypeKHR type);
+#endif
 };
 } // namespace xr

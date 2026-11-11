@@ -70,11 +70,12 @@ void vivarium::request_permissions()
 }
 
 vivarium::sensors::sensors(xr::instance & instance, xr::system & system, xr::session & session, vk::raii::Device & device, uint32_t queue_family_index,
-                           bool marker_tracking, bool rgb_camera_streaming, bool depth_camera_streaming) :
+                           bool marker_tracking, bool rgb_camera_streaming, bool depth_camera_streaming, float marker_detect_scale) :
         camera(make_camera()),
         marker_tracking(marker_tracking),
         rgb_camera_streaming(rgb_camera_streaming),
-        depth_camera_streaming(depth_camera_streaming)
+        depth_camera_streaming(depth_camera_streaming),
+        marker_detect_scale(marker_detect_scale)
 {
 	if (not depth_camera_streaming)
 		return;
@@ -112,7 +113,18 @@ void vivarium::sensors::frame(XrTime display_time)
 	{
 		if (not (marker_tracking or rgb_camera_streaming) or camera.call<jni::Bool>("hasPermissions"))
 		{
-			camera_started = camera.call<jni::Bool>("start", jni::Bool(marker_tracking), jni::Bool(rgb_camera_streaming), jni::Bool(depth_camera_streaming));
+			// The stream settings have no lobby switch; read them when the capture starts.
+			const auto & config = application::get_config();
+			camera_started = camera.call<jni::Bool>("start",
+			                                        jni::Bool(marker_tracking),
+			                                        jni::Bool(rgb_camera_streaming),
+			                                        jni::Bool(depth_camera_streaming),
+			                                        jni::string(config.camera_stream_codec.c_str()),
+			                                        jni::Int(int(config.camera_stream_width)),
+			                                        jni::Int(int(config.camera_stream_height)),
+			                                        jni::Int(int(config.camera_stream_bitrate_mbps)),
+			                                        jni::Int(int(config.camera_capture_fps)),
+			                                        jni::Float(marker_detect_scale));
 			if (camera_started)
 				spdlog::info("Sensor streaming: started");
 			else

@@ -29,6 +29,11 @@
 #include <vulkan/vulkan.h>
 #include <openxr/openxr_platform.h>
 
+#ifdef XR_USE_PLATFORM_ANDROID
+#include <pthread.h>
+#include <unistd.h>
+#endif
+
 xr::session::session(xr::instance & inst, xr::system & sys, vk::raii::Instance & vk_inst, vk::raii::PhysicalDevice & pdev, vk::raii::Device & dev, thread_safe<vk::raii::Queue> & queue, int queue_family_index) :
         inst(&inst),
         queue(&queue)
@@ -67,6 +72,13 @@ xr::session::session(xr::instance & inst, xr::system & sys, vk::raii::Instance &
 		xrSetPerformanceMetricsStateMETA = inst.get_proc<PFN_xrSetPerformanceMetricsStateMETA>("xrSetPerformanceMetricsStateMETA");
 		xrQueryPerformanceMetricsCounterMETA = inst.get_proc<PFN_xrQueryPerformanceMetricsCounterMETA>("xrQueryPerformanceMetricsCounterMETA");
 	}
+
+#ifdef XR_USE_PLATFORM_ANDROID
+	if (inst.has_extension(XR_KHR_ANDROID_THREAD_SETTINGS_EXTENSION_NAME))
+		xrSetAndroidApplicationThreadKHR = inst.get_proc<PFN_xrSetAndroidApplicationThreadKHR>("xrSetAndroidApplicationThreadKHR");
+	else
+		spdlog::warn("XR_KHR_android_thread_settings is absent: the frame-loop and worker threads keep their default priority");
+#endif
 }
 
 std::vector<XrReferenceSpaceType> xr::session::get_reference_spaces() const
@@ -390,6 +402,39 @@ void xr::session::set_performance_level(XrPerfSettingsDomainEXT domain, XrPerfSe
 	if (xrPerfSettingsSetPerformanceLevelEXT)
 		xrPerfSettingsSetPerformanceLevelEXT(*this, domain, level);
 }
+
+#ifdef XR_USE_PLATFORM_ANDROID
+static const char * android_thread_type_name(XrAndroidThreadTypeKHR type)
+{
+	switch (type)
+	{
+		case XR_ANDROID_THREAD_TYPE_APPLICATION_MAIN_KHR:
+			return "application_main";
+		case XR_ANDROID_THREAD_TYPE_APPLICATION_WORKER_KHR:
+			return "application_worker";
+		case XR_ANDROID_THREAD_TYPE_RENDERER_MAIN_KHR:
+			return "renderer_main";
+		case XR_ANDROID_THREAD_TYPE_RENDERER_WORKER_KHR:
+			return "renderer_worker";
+		default:
+			return "unknown";
+	}
+}
+
+void xr::session::set_android_thread_type(XrAndroidThreadTypeKHR type)
+{
+	if (not xrSetAndroidApplicationThreadKHR)
+		return;
+
+	const uint32_t tid = gettid();
+	char name[16] = {};
+	pthread_getname_np(pthread_self(), name, sizeof(name));
+	if (XrResult res = xrSetAndroidApplicationThreadKHR(id, type, tid); XR_SUCCEEDED(res))
+		spdlog::info("thread settings: {} tid {} ({})", android_thread_type_name(type), tid, name);
+	else
+		spdlog::warn("thread settings: {} tid {} ({}) refused: {}", android_thread_type_name(type), tid, name, xr::to_string(res));
+}
+#endif
 
 std::vector<std::string> xr::session::performance_metrics_counters()
 {

@@ -1,0 +1,61 @@
+/*
+ * WiVRn VR streaming
+ * Copyright (C) 2026  General Robotics
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ */
+
+package org.meumeu.wivrn.vivarium
+
+import java.util.Locale
+
+/**
+ * The marker detector's measured rate, CPU cost and yield, summarized once per [periodNs]
+ * as `14.8 Hz, 11.2 ms/frame, 1 thread, 6 markers max`: frames processed over the period's
+ * wall time, the detector thread's CPU time per frame, how many threads carry the
+ * detector's name (OpenCV's worker pool inherits it, so more than one means the pool
+ * is still in use), and the most markers one frame held (a drop after a scale change
+ * means the search lost recall).
+ */
+class DetectorStats(private val periodNs: Long = 60_000_000_000L) {
+    private var periodStartNs = Long.MIN_VALUE
+    private var frames = 0
+    private var cpuNs = 0L
+    private var maxMarkers = 0
+
+    /**
+     * Records a frame that took [frameCpuNs] of CPU and held [markers], finished at
+     * [nowNs]; returns the summary line when a period has elapsed, counting [threads]
+     * at that moment, else null.
+     */
+    fun add(nowNs: Long, frameCpuNs: Long, markers: Int, threads: () -> Int): String? {
+        if (periodStartNs == Long.MIN_VALUE) periodStartNs = nowNs
+        frames++
+        cpuNs += frameCpuNs
+        if (markers > maxMarkers) maxMarkers = markers
+        val elapsedNs = nowNs - periodStartNs
+        if (elapsedNs < periodNs) return null
+        val count = threads()
+        val line = String.format(
+            Locale.US, "%.1f Hz, %.1f ms/frame, %d thread%s, %d marker%s max",
+            frames * 1e9 / elapsedNs, cpuNs / 1e6 / frames, count, if (count == 1) "" else "s",
+            maxMarkers, if (maxMarkers == 1) "" else "s",
+        )
+        periodStartNs = nowNs
+        frames = 0
+        cpuNs = 0
+        maxMarkers = 0
+        return line
+    }
+}

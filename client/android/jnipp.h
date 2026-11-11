@@ -25,6 +25,7 @@
 #include <tuple>
 
 #include <jni.h>
+#include <pthread.h>
 #include <type_traits>
 
 namespace jni
@@ -61,7 +62,17 @@ public:
 		if (inst.vm)
 			return;
 		inst.vm = vm;
-		inst.vm->AttachCurrentThread(&inst.jni_env, nullptr);
+		// ART renames the native thread after the java.lang.Thread it attaches it to, "Thread-N"
+		// when none is given: hand it the name the thread already has so the kernel comm (what
+		// perfetto and ps show) survives the attach (GRID #3095).
+		char name[16] = {};
+		pthread_getname_np(pthread_self(), name, sizeof(name));
+		JavaVMAttachArgs args{
+		        .version = JNI_VERSION_1_6,
+		        .name = name,
+		        .group = nullptr,
+		};
+		inst.vm->AttachCurrentThread(&inst.jni_env, &args);
 	}
 
 	static void setup_thread(JNIEnv * env)
@@ -106,6 +117,32 @@ struct Int
 	}
 
 	operator int() const
+	{
+		return value;
+	}
+};
+
+struct Float
+{
+	constexpr static auto static_field = &_JNIEnv::GetStaticFloatField;
+	constexpr static auto obj_field = &_JNIEnv::GetFloatField;
+	constexpr static const auto call_method = &_JNIEnv::CallFloatMethod;
+	constexpr static const auto call_static_method = &_JNIEnv::CallStaticFloatMethod;
+
+	static std::string type()
+	{
+		return "F";
+	}
+
+	float value;
+
+	// A float argument of a variadic JNI call is promoted to double, as JNI expects.
+	float handle() const
+	{
+		return value;
+	}
+
+	operator float() const
 	{
 		return value;
 	}
