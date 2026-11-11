@@ -55,18 +55,12 @@ internal fun copyPlane(
     val dstStart = dst.position()
     val dstLimit = dst.limit()
     try {
-        if (srcPixelStride == dstPixelStride && srcPixelStride <= 2) {
-            // Packed (1) or interleaved chroma (2): each row is one contiguous run from the
-            // plane's first sample, so a bulk put moves it. An interleaved run carries the
-            // other chroma's samples between this plane's, in the same order on both sides
-            // whatever the U/V order of the underlying buffers, and its last foreign sample
-            // is the other plane's last, which that plane's own copy writes.
-            val run = (width - 1) * srcPixelStride + 1
+        if (srcPixelStride == 1 && dstPixelStride == 1) {
             for (row in 0 until height) {
                 val from = srcStart + row * srcRowStride
                 src.limit(srcLimit)
                 src.position(from)
-                src.limit(from + run)
+                src.limit(from + width)
                 dst.position(dstStart + row * dstRowStride)
                 dst.put(src)
             }
@@ -88,15 +82,36 @@ internal fun copyPlane(
 }
 
 /** Copies a YUV_420_888 [src] into the same-sized encoder input image [dst], plane by plane. */
+/**
+ * Which chroma plane (1 = U, 2 = V) starts the interleaved block, or 0 when the chroma is
+ * planar. Android maps both planes of an interleaved block onto one buffer, one byte apart,
+ * so the plane that starts first has the longer buffer.
+ */
+internal fun firstChromaPlane(uRemaining: Int, uPixelStride: Int, vRemaining: Int, vPixelStride: Int): Int = when {
+    uPixelStride != 2 || vPixelStride != 2 -> 0
+    uRemaining > vRemaining -> 1
+    vRemaining > uRemaining -> 2
+    else -> 0
+}
+
 internal fun copyYuv420(src: Image, dst: Image) {
     val width = src.width
     val height = src.height
     val from = src.planes
     val to = dst.planes
-    for (plane in 0..2) {
-        val divisor = if (plane == 0) 1 else 2
+    copyPlane(width, height, from[0].buffer, from[0].rowStride, from[0].pixelStride, to[0].buffer, to[0].rowStride, to[0].pixelStride)
+    val srcFirst = firstChromaPlane(from[1].buffer.remaining(), from[1].pixelStride, from[2].buffer.remaining(), from[2].pixelStride)
+    val dstFirst = firstChromaPlane(to[1].buffer.remaining(), to[1].pixelStride, to[2].buffer.remaining(), to[2].pixelStride)
+    if (srcFirst != 0 && srcFirst == dstFirst) {
+        // Both sides interleave their chroma in the same order (NV12 or NV21): the block is
+        // one packed row of `width` bytes per chroma line from the first plane, moved in bulk
+        // (the per-sample path below costs the Quest ~25 % CPU at 30 Hz, live 2026-11-11).
+        copyPlane(width, height / 2, from[srcFirst].buffer, from[srcFirst].rowStride, 1, to[dstFirst].buffer, to[dstFirst].rowStride, 1)
+        return
+    }
+    for (plane in 1..2) {
         copyPlane(
-            width / divisor, height / divisor,
+            width / 2, height / 2,
             from[plane].buffer, from[plane].rowStride, from[plane].pixelStride,
             to[plane].buffer, to[plane].rowStride, to[plane].pixelStride,
         )

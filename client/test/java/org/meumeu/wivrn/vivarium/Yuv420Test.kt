@@ -146,20 +146,34 @@ class Yuv420Test {
     }
 
     @Test
-    fun copyPlaneInterleavedToInterleavedKeepsEachChannelWhateverTheOrder() {
-        // Source NV12 rows (U V U V, row stride 5), destination NV21 (V U V U, row stride 4):
-        // copying each plane from its own first sample lands U on U and V on V.
+    fun interleavedToInterleavedOfAnotherOrderGoesSampleBySample() {
+        // Source NV12 rows (U V U V, row stride 5), destination NV21 (V U V U, row stride 4).
         val src = ByteBuffer.wrap(byteArrayOf(1, -1, 2, -2, 99, 3, -3, 4, -4, 99))
         val srcU = src.duplicate().apply { position(0); limit(10) }
         val srcV = src.duplicate().apply { position(1); limit(10) }
         val dst = ByteBuffer.wrap(ByteArray(8) { 77 })
         val dstV = dst.duplicate().apply { position(0) }
         val dstU = dst.duplicate().apply { position(1) }
+        assertEquals(1, firstChromaPlane(srcU.remaining(), 2, srcV.remaining(), 2))
+        assertEquals(2, firstChromaPlane(dstU.remaining(), 2, dstV.remaining(), 2))
+        assertEquals(0, firstChromaPlane(8, 1, 8, 1))
 
         copyPlane(2, 2, srcU, 5, 2, dstU, 4, 2)
         copyPlane(2, 2, srcV, 5, 2, dstV, 4, 2)
 
         assertArrayEquals(byteArrayOf(-1, 1, -2, 2, -3, 3, -4, 4), dst.array())
+    }
+
+    @Test
+    fun sameOrderInterleavedChromaMovesAsPackedRows() {
+        // The same order on both sides: the block is copied as rows of `width` bytes from the
+        // first plane, one bulk put per row, row padding skipped on both sides.
+        val src = ByteBuffer.wrap(byteArrayOf(1, -1, 2, -2, 99, 3, -3, 4, -4, 99)).apply { limit(9) }
+        val dst = ByteBuffer.wrap(ByteArray(12) { 77 })
+
+        copyPlane(4, 2, src, 5, 1, dst, 6, 1)
+
+        assertArrayEquals(byteArrayOf(1, -1, 2, -2, 77, 77, 3, -3, 4, -4, 77, 77), dst.array())
     }
 
     @Test
