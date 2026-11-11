@@ -49,6 +49,11 @@ set(XRT_FEATURE_OPENXR_INTERACTION_VIVE_FOCUS3   ON)
 set(XRT_FEATURE_OPENXR_INTERACTION_TOUCH_PRO     ON)
 set(XRT_FEATURE_OPENXR_INTERACTION_TOUCH_PLUS    ON)
 set(XRT_FEATURE_OPENXR_LAYER_COLOR_SCALE_BIAS    ON)
+# XR_FB_composition_layer_image_layout: lets WebGL clients (Chromium) flag a vertically
+# flipped layer instead of negating the view's angleUp/angleDown, which is only correct for a
+# symmetric frustum; on the Quest 3 the negation leaves the bottom 11 deg of each eye uncovered.
+# The compositor honours flip_y on both the foveation fast path and the layer squasher.
+set(XRT_FEATURE_OPENXR_LAYER_FB_IMAGE_LAYOUT     ON)
 set(XRT_FEATURE_OPENXR_LAYER_DEPTH              OFF)
 set(XRT_FEATURE_OPENXR_VARJO_QUAD_VIEWS         OFF)
 
