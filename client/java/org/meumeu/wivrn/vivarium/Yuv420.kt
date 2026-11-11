@@ -192,8 +192,9 @@ internal fun copyYuv420(src: Image, dst: Image) {
     val srcFirst = interleavedOrder(from[1].buffer, from[1].pixelStride, from[2].buffer, from[2].pixelStride)
     val dstFirst = probeInterleavedOrder(to[1].buffer, to[1].pixelStride, to[2].buffer, to[2].pixelStride)
     if (!layoutLogged) {
+        // Once per process: which copy path the device's layouts take (Quest 3: NV21 to NV12).
         layoutLogged = true
-        android.util.Log.i("SensorStreaming", "yuv copy: src strides ${from.map { "${it.rowStride}/${it.pixelStride}" }} order $srcFirst, dst strides ${to.map { "${it.rowStride}/${it.pixelStride}" }} order $dstFirst")
+        android.util.Log.i("SensorStreaming", "yuv copy: camera strides ${from.map { "${it.rowStride}/${it.pixelStride}" }} order $srcFirst, encoder ${to.map { "${it.rowStride}/${it.pixelStride}" }} order $dstFirst")
     }
     if (srcFirst != 0 && dstFirst != 0) {
         // Both sides interleave their chroma: the block moves as rows through a scratch array,
