@@ -123,6 +123,64 @@ internal fun probeInterleavedOrder(u: ByteBuffer, uPixelStride: Int, v: ByteBuff
     return if (vFirst) 2 else 0
 }
 
+/**
+ * Copies an interleaved chroma block of [rows] rows of [width] bytes (both chroma channels,
+ * `width / 2` pairs) between two interleaved layouts. [srcFirst] / [dstFirst] are the planes
+ * whose sample starts each row, [srcSecond] / [dstSecond] the other ones; Android ends a
+ * plane's buffer at that plane's last sample, so each row is `width - 1` bytes from the first
+ * plane plus the last byte from the second. With [swap] every pair changes order (NV21 to
+ * NV12 or back). Rows go through a scratch array: bulk buffer I/O and a tight loop, instead
+ * of indexed buffer accesses per sample.
+ */
+internal fun copyInterleavedChroma(
+    width: Int,
+    rows: Int,
+    srcFirst: ByteBuffer,
+    srcSecond: ByteBuffer,
+    srcRowStride: Int,
+    dstFirst: ByteBuffer,
+    dstSecond: ByteBuffer,
+    dstRowStride: Int,
+    swap: Boolean,
+) {
+    val scratch = ByteArray(width)
+    val srcStart = srcFirst.position()
+    val srcLimit = srcFirst.limit()
+    val dstStart = dstFirst.position()
+    val dstLimit = dstFirst.limit()
+    val srcSecondStart = srcSecond.position()
+    val dstSecondStart = dstSecond.position()
+    try {
+        for (row in 0 until rows) {
+            val from = srcStart + row * srcRowStride
+            srcFirst.limit(srcLimit)
+            srcFirst.position(from)
+            srcFirst.limit(from + width - 1)
+            srcFirst.get(scratch, 0, width - 1)
+            scratch[width - 1] = srcSecond.get(srcSecondStart + row * srcRowStride + width - 2)
+            if (swap) {
+                var i = 0
+                while (i < width) {
+                    val first = scratch[i]
+                    scratch[i] = scratch[i + 1]
+                    scratch[i + 1] = first
+                    i += 2
+                }
+            }
+            val to = dstStart + row * dstRowStride
+            dstFirst.limit(dstLimit)
+            dstFirst.position(to)
+            dstFirst.put(scratch, 0, width - 1)
+            dstSecond.put(dstSecondStart + row * dstRowStride + width - 2, scratch[width - 1])
+        }
+    } finally {
+        srcFirst.limit(srcLimit)
+        srcFirst.position(srcStart)
+        dstFirst.limit(dstLimit)
+        dstFirst.position(dstStart)
+    }
+}
+
 private var layoutLogged = false
 
 internal fun copyYuv420(src: Image, dst: Image) {
@@ -137,15 +195,16 @@ internal fun copyYuv420(src: Image, dst: Image) {
         layoutLogged = true
         android.util.Log.i("SensorStreaming", "yuv copy: src strides ${from.map { "${it.rowStride}/${it.pixelStride}" }} order $srcFirst, dst strides ${to.map { "${it.rowStride}/${it.pixelStride}" }} order $dstFirst")
     }
-    if (srcFirst != 0 && srcFirst == dstFirst) {
-        // Both sides interleave their chroma in the same order (NV12 or NV21): each plane's
-        // row is one run of `width - 1` bytes from its first sample to its last, with the other
-        // plane's samples in between at the same offsets, so a bulk put per row moves it; the
-        // two runs overlap, which is cheaper than the per-sample path below (a whole core on
-        // the Quest at 30 Hz, live 2026-11-11). A plane's buffer ends at its own last sample.
-        for (plane in 1..2) {
-            copyPlane(width - 1, height / 2, from[plane].buffer, from[plane].rowStride, 1, to[plane].buffer, to[plane].rowStride, 1)
-        }
+    if (srcFirst != 0 && dstFirst != 0) {
+        // Both sides interleave their chroma: the block moves as rows through a scratch array,
+        // pairs swapped when the orders differ (the Quest 3 camera gives NV21, its encoder
+        // takes NV12). The per-sample path below took 33 ms a frame on the Quest, live 2026-11-11.
+        copyInterleavedChroma(
+            width, height / 2,
+            from[srcFirst].buffer, from[3 - srcFirst].buffer, from[1].rowStride,
+            to[dstFirst].buffer, to[3 - dstFirst].buffer, to[1].rowStride,
+            swap = srcFirst != dstFirst,
+        )
         return
     }
     for (plane in 1..2) {
