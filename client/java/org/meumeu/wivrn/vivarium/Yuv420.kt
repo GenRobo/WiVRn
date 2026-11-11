@@ -132,10 +132,14 @@ internal fun copyYuv420(src: Image, dst: Image) {
     val srcFirst = interleavedOrder(from[1].buffer, from[1].pixelStride, from[2].buffer, from[2].pixelStride)
     val dstFirst = probeInterleavedOrder(to[1].buffer, to[1].pixelStride, to[2].buffer, to[2].pixelStride)
     if (srcFirst != 0 && srcFirst == dstFirst) {
-        // Both sides interleave their chroma in the same order (NV12 or NV21): the block is
-        // one packed row of `width` bytes per chroma line from the first plane, moved in bulk
-        // (the per-sample path below costs the Quest a whole core at 30 Hz, live 2026-11-11).
-        copyPlane(width, height / 2, from[srcFirst].buffer, from[srcFirst].rowStride, 1, to[dstFirst].buffer, to[dstFirst].rowStride, 1)
+        // Both sides interleave their chroma in the same order (NV12 or NV21): each plane's
+        // row is one run of `width - 1` bytes from its first sample to its last, with the other
+        // plane's samples in between at the same offsets, so a bulk put per row moves it; the
+        // two runs overlap, which is cheaper than the per-sample path below (a whole core on
+        // the Quest at 30 Hz, live 2026-11-11). A plane's buffer ends at its own last sample.
+        for (plane in 1..2) {
+            copyPlane(width - 1, height / 2, from[plane].buffer, from[plane].rowStride, 1, to[plane].buffer, to[plane].rowStride, 1)
+        }
         return
     }
     for (plane in 1..2) {

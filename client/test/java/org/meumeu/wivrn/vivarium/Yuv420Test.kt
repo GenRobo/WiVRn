@@ -172,15 +172,23 @@ class Yuv420Test {
     }
 
     @Test
-    fun sameOrderInterleavedChromaMovesAsPackedRows() {
-        // The same order on both sides: the block is copied as rows of `width` bytes from the
-        // first plane, one bulk put per row, row padding skipped on both sides.
-        val src = ByteBuffer.wrap(byteArrayOf(1, -1, 2, -2, 99, 3, -3, 4, -4, 99)).apply { limit(9) }
-        val dst = ByteBuffer.wrap(ByteArray(12) { 77 })
+    fun sameOrderInterleavedChromaMovesAsOverlappingRunsWithinEachPlane() {
+        // NV12 on both sides, two chroma rows of two pairs, row stride 5 (source) and 4
+        // (destination); Android ends each plane's buffer at that plane's last sample, so the
+        // runs are `width - 1` bytes and the last of each row comes from the other plane.
+        val src = ByteBuffer.wrap(byteArrayOf(1, -1, 2, -2, 99, 3, -3, 4, -4))
+        val srcU = src.duplicate().apply { position(0); limit(8) }
+        val srcV = src.duplicate().apply { position(1); limit(9) }
+        val dst = ByteBuffer.wrap(ByteArray(8) { 77 })
+        val dstU = dst.duplicate().apply { position(0); limit(7) }
+        val dstV = dst.duplicate().apply { position(1); limit(8) }
+        assertEquals(1, interleavedOrder(srcU, 2, srcV, 2))
+        assertEquals(1, probeInterleavedOrder(dstU, 2, dstV, 2))
 
-        copyPlane(4, 2, src, 5, 1, dst, 6, 1)
+        copyPlane(4 - 1, 2, srcU, 5, 1, dstU, 4, 1)
+        copyPlane(4 - 1, 2, srcV, 5, 1, dstV, 4, 1)
 
-        assertArrayEquals(byteArrayOf(1, -1, 2, -2, 77, 77, 3, -3, 4, -4, 77, 77), dst.array())
+        assertArrayEquals(byteArrayOf(1, -1, 2, -2, 3, -3, 4, -4), dst.array())
     }
 
     @Test
