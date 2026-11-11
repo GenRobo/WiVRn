@@ -123,6 +123,7 @@ void vivarium::sensors::frame(XrTime display_time)
 			                                        jni::Int(int(config.camera_stream_width)),
 			                                        jni::Int(int(config.camera_stream_height)),
 			                                        jni::Int(int(config.camera_stream_bitrate_mbps)),
+			                                        jni::Int(int(config.camera_capture_fps)),
 			                                        jni::Float(marker_detect_scale));
 			if (camera_started)
 				spdlog::info("Sensor streaming: started");

@@ -115,6 +115,7 @@ class CameraStream(
     private val codecName: String,
     private val requestedStreamSize: StreamSize,
     private val bitrateMbps: Int,
+    private val captureFps: Int,
     private val detectScale: Float,
 ) {
     @Volatile private var running = false
@@ -304,7 +305,7 @@ class CameraStream(
         val format = MediaFormat.createVideoFormat(MediaFormat.MIMETYPE_VIDEO_AVC, streamSize.width, streamSize.height).apply {
             setInteger(MediaFormat.KEY_COLOR_FORMAT, MediaCodecInfo.CodecCapabilities.COLOR_FormatYUV420Flexible)
             setInteger(MediaFormat.KEY_BIT_RATE, bitrateMbps * 1_000_000)
-            setInteger(MediaFormat.KEY_FRAME_RATE, FPS)
+            setInteger(MediaFormat.KEY_FRAME_RATE, captureFps)
             setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, 1)
             setInteger(MediaFormat.KEY_PREPEND_HEADER_TO_SYNC_FRAMES, 1)
             setInteger(MediaFormat.KEY_LATENCY, 1)
@@ -329,7 +330,10 @@ class CameraStream(
     @SuppressLint("MissingPermission") // start() checks the permissions first.
     private fun openCamera(manager: CameraManager, id: String, ch: CameraCharacteristics) {
         val fpsRange = ch.get(CameraCharacteristics.CONTROL_AE_AVAILABLE_TARGET_FPS_RANGES)
-            ?.firstOrNull { it.lower == FPS && it.upper == FPS }
+            ?.firstOrNull { it.lower == captureFps && it.upper == captureFps }
+            ?: ch.get(CameraCharacteristics.CONTROL_AE_AVAILABLE_TARGET_FPS_RANGES)
+                ?.firstOrNull { it.lower == FPS && it.upper == FPS }
+                ?.also { Log.w(TAG, "camera offers no fixed $captureFps fps range; capturing at $FPS") }
         manager.openCamera(id, object : CameraDevice.StateCallback() {
             override fun onOpened(device: CameraDevice) {
                 if (!running) {

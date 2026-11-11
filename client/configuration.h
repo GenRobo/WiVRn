@@ -139,6 +139,8 @@ public:
 	uint32_t camera_stream_width = 1280;
 	uint32_t camera_stream_height = 960;
 	uint32_t camera_stream_bitrate_mbps = 4;
+	// Camera capture rate for detection and the stream (an AE target range the camera offers)
+	uint32_t camera_capture_fps = 60;
 
 	bool check_feature(feature f) const;
 	void set_feature(feature f, bool state);

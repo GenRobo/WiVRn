@@ -327,6 +327,7 @@ configuration file only:
 | `camera_stream_width` | `1280` | Streamed image width; with the height, one of the YUV_420_888 output sizes the camera reports (a second capture output next to the 1280x960 one detection uses). |
 | `camera_stream_height` | `960` | Streamed image height; a size the camera does not offer is logged and the 1280x960 capture is streamed. |
 | `camera_stream_bitrate_mbps` | `4` | H.264 target bitrate, variable-bitrate mode, in Mbit/s. |
+| `camera_capture_fps` | `60` | Camera capture rate for detection and the stream, a fixed AE range the camera offers (the Quest 3 offers 30 and 60); 30 halves the frame delivery work when the PC asks for 15 frames a second or fewer. |
 
 CALIBRATION carries the codec (`1` JPEG, `2` H264) and the streamed size;
 marker reports keep the 1280x960 capture size. With H.264 each FRAME payload is

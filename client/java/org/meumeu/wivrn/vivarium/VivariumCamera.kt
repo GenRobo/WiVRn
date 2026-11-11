@@ -48,6 +48,7 @@ class VivariumCamera(private val activity: MainActivity) {
         streamWidth: Int,
         streamHeight: Int,
         bitrateMbps: Int,
+        captureFps: Int,
         detectScale: Float,
     ): Boolean {
         if (stream != null) return true
@@ -61,6 +62,7 @@ class VivariumCamera(private val activity: MainActivity) {
             codec,
             StreamSize(streamWidth, streamHeight),
             bitrateMbps,
+            captureFps,
             detectScale,
         )
         try {
